@@ -42,8 +42,9 @@ public class RobotController {
 
         System.out.println("[robot-controller] starting; connecting to ws://" + host + ":" + port);
 
-        RobotBehaviour behaviour = new HeartTraceBehaviour();
+        RobotBehaviour behaviour = new SquareTraceBehaviour();
         // RobotBehaviour behaviour = new CircleTraceBehaviour(); // easy swap back to circle
+        // RobotBehaviour behaviour = new HeartTraceBehaviour();
         Framework framework = new Framework(host, port, behaviour);
         WheeledMover.setFramework(framework);
         Sensors.setFramework(framework);
