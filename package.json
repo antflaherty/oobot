@@ -4,13 +4,10 @@
   "private": true,
   "description": "oobot MVP — Object Oriented Robotics: a Java program controls a robot in a continuously running simulation, visible in a separate browser visualiser.",
   "scripts": {
-    "dev": "concurrently --names sim,viz,robot -c blue,magenta,green \"npm:dev:server\" \"npm:dev:visualiser\" \"npm:dev:robot\"",
+    "dev": "node scripts/dev.js",
     "dev:server": "cd simulator/server && npm run dev",
     "dev:visualiser": "cd simulator/visualiser && npm run dev",
     "dev:robot": "java -jar robot-framework/robot.jar --host localhost --port 8080"
-  },
-  "devDependencies": {
-    "concurrently": "^9.1.2"
   },
   "engines": {
     "node": ">=20",

@@ -161,8 +161,12 @@ export class WebSocketTransport implements Transport {
   private handlers: Handlers | null = null;
 
   async listen(options: TransportOptions): Promise<void> {
-    this.robotServer = new WebSocketServer({ host: "localhost", port: options.robotPort });
-    this.visualiserServer = new WebSocketServer({ host: "localhost", port: options.visualiserPort });
+    // Bind to IPv4 (0.0.0.0) so both IPv4-only clients (e.g. Java's
+    // Socket.connect("localhost") which may not fall back from ::1) and
+    // dual-stack clients can connect. Binding to "localhost" on macOS
+    // results in IPv6-only listening, which breaks IPv4-only clients.
+    this.robotServer = new WebSocketServer({ host: "0.0.0.0", port: options.robotPort });
+    this.visualiserServer = new WebSocketServer({ host: "0.0.0.0", port: options.visualiserPort });
 
     this.robotServer.on("connection", (ws: WebSocket, request: IncomingMessage) => {
       if (!isAllowedOrigin(request.headers.origin)) {
