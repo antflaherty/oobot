@@ -3,8 +3,8 @@
 //
 // Connects to the sim's visualiser channel
 //   ws://localhost:VISUALISER_PORT
-// and buffers incoming `worldSnapshot` NDJSON messages so the renderer can
-// interpolate between them on each render frame.
+// and buffers incoming `worldSnapshot` NDJSON messages with their arrival
+// times so the renderer can interpolate between them on each render frame.
 // ---------------------------------------------------------------------------
 
 import type { WorldSnapshot, RobotPose } from './types';
@@ -13,18 +13,30 @@ import { angleLerp, clamp01, lerp } from './math';
 const VISUALISER_PORT = 8081;
 const RECONNECT_DELAY_MS = 2000;
 const MAX_BUFFERED = 120; // ~2 seconds at 60 Hz
+const TICKS_PER_SECOND = 60;
 
 export interface PoseResult {
   pose: RobotPose;
   holding: boolean;
 }
 
+interface BufferedSnapshot {
+  simTick: number;
+  pose: RobotPose;
+  receivedAt: number; // performance.now() when received
+}
+
 export class LiveStream {
   private ws: WebSocket | null = null;
-  private snapshots: WorldSnapshot[] = []; // sorted by simTick ascending
+  private snapshots: BufferedSnapshot[] = []; // sorted by simTick ascending
   private latestTick = -1;
   private connected = false;
   private reconnectTimer: number | null = null;
+
+  // Reference point for the continuously advancing render clock.
+  // renderTick = baseTick + (now - baseTime) * TICKS_PER_SECOND / 1000
+  private baseTick = 0;
+  private baseTime = 0;
 
   start(): void {
     this.connect();
@@ -50,14 +62,21 @@ export class LiveStream {
     return this.latestTick >= 0 ? this.latestTick : null;
   }
 
-  /** Interpolate the robot pose at the given simTick using buffered snapshots. */
-  getPoseAt(tick: number): PoseResult | null {
+  /** Interpolate the robot pose at the given wall-clock render time. */
+  getPoseAt(now: number): PoseResult | null {
     if (this.snapshots.length === 0) return null;
 
-    // Find the last snapshot with simTick <= tick (the held frame).
+    // Advance the render clock continuously from the base reference.
+    const elapsedMs = now - this.baseTime;
+    const renderTick = this.baseTick + (elapsedMs * TICKS_PER_SECOND) / 1000;
+
+    // Never extrapolate beyond the latest received snapshot.
+    const cappedTick = Math.min(renderTick, this.latestTick);
+
+    // Find the two snapshots bracketing cappedTick.
     let fromIndex = 0;
     for (let i = 0; i < this.snapshots.length; i++) {
-      if (this.snapshots[i].simTick <= tick) {
+      if (this.snapshots[i].simTick <= cappedTick) {
         fromIndex = i;
       } else {
         break;
@@ -69,20 +88,33 @@ export class LiveStream {
 
     // No newer snapshot yet: hold the last received frame, no extrapolation.
     if (!to) {
-      return { pose: { ...from.payload.robot }, holding: true };
+      return { pose: { ...from.pose }, holding: true };
     }
 
     const span = to.simTick - from.simTick;
-    const s = span > 0 ? clamp01((tick - from.simTick) / span) : 1;
+    const s = span > 0 ? clamp01((cappedTick - from.simTick) / span) : 1;
 
     return {
       pose: {
-        x: lerp(from.payload.robot.x, to.payload.robot.x, s),
-        y: lerp(from.payload.robot.y, to.payload.robot.y, s),
-        heading: angleLerp(from.payload.robot.heading, to.payload.robot.heading, s),
+        x: lerp(from.pose.x, to.pose.x, s),
+        y: lerp(from.pose.y, to.pose.y, s),
+        heading: angleLerp(from.pose.heading, to.pose.heading, s),
       },
       holding: false,
     };
+  }
+
+  /** Rebase the render clock when a new snapshot arrives.
+   *
+   * The render clock lags the latest snapshot by one tick so renderTick falls
+   * between two buffered snapshots (`from`/`to`) instead of being pinned at
+   * `latestTick`, which would hold the last frame forever. Sim and render both
+   * advance at 60 Hz, so renderTick sweeps [T-1, T) across each tick interval
+   * while snapshots T-1 and T are buffered: continuous interpolation.
+   */
+  private rebase(newest: BufferedSnapshot): void {
+    this.baseTick = newest.simTick - 1;
+    this.baseTime = newest.receivedAt;
   }
 
   private connect(): void {
@@ -134,8 +166,16 @@ export class LiveStream {
   }
 
   private handleSnapshot(snapshot: WorldSnapshot): void {
-    this.snapshots.push(snapshot);
+    const buffered: BufferedSnapshot = {
+      simTick: snapshot.simTick,
+      pose: { ...snapshot.payload.robot },
+      receivedAt: performance.now(),
+    };
+    this.snapshots.push(buffered);
     this.latestTick = snapshot.simTick;
+
+    // Rebase the render clock to the newest snapshot.
+    this.rebase(buffered);
 
     // Keep the buffer bounded so memory doesn't grow unboundedly.
     if (this.snapshots.length > MAX_BUFFERED) {

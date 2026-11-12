@@ -103,7 +103,7 @@ function frame(): void {
 
   const latestTick = liveStream.getLatestTick();
   if (latestTick !== null && liveStream.isConnected()) {
-    const liveResult = liveStream.getPoseAt(latestTick);
+    const liveResult = liveStream.getPoseAt(now);
     if (liveResult) {
       result = liveResult;
       source = result.holding ? 'live (holding)' : 'live';

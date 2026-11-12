@@ -17,6 +17,7 @@ export interface WorldConfig {
   width: number;      // world units, X extent of the box
   height: number;     // world units, Y extent of the box
   maxSpeed: number;   // world units per second at full motor power (1.0)
+  maxAngularSpeed: number; // radians per second at full differential drive
   trackWidth: number; // world units, distance between the two wheels
   tickRate: number;   // sim steps per second (~60)
 }
@@ -24,7 +25,8 @@ export interface WorldConfig {
 export const DEFAULT_WORLD_CONFIG: WorldConfig = {
   width: 800,
   height: 600,
-  maxSpeed: 2.0,
+  maxSpeed: 100.0, // world units / s at full motor power — perceptible on canvas
+  maxAngularSpeed: Math.PI / 2, // radians / s at full differential — ~90° per turn state
   trackWidth: 0.5,
   tickRate: 60,
 };
@@ -45,6 +47,7 @@ export class WorldModel {
 
   private readonly dt: number;
   private readonly maxSpeed: number;
+  private readonly maxAngularSpeed: number;
   private readonly trackWidth: number;
 
   public pose: RobotPose;
@@ -56,6 +59,7 @@ export class WorldModel {
     this.maxY = config.height / 2;
     this.dt = 1 / config.tickRate;
     this.maxSpeed = config.maxSpeed;
+    this.maxAngularSpeed = config.maxAngularSpeed;
     this.trackWidth = config.trackWidth;
     this.pose = { ...startPose };
   }
@@ -68,7 +72,10 @@ export class WorldModel {
     const r = clamp(right, -1, 1);
 
     const linear = ((l + r) / 2) * this.maxSpeed;            // world units / s
-    const angular = ((r - l) / this.trackWidth) * this.maxSpeed; // radians / s
+    let angular = ((r - l) / this.trackWidth) * this.maxSpeed; // radians / s
+    // Cap angular velocity independently so full differential drive turns at a
+    // sane rate (~90°/s) even when linear speed is high.
+    angular = clamp(angular, -this.maxAngularSpeed, this.maxAngularSpeed);
 
     const newHeading = this.pose.heading + angular * this.dt;
     // Integrate translation at the midpoint heading for smoother curves.
