@@ -95,8 +95,19 @@ Example:
 { "type": "motorCommand", "seq": 7, "simTick": 142, "payload": { "left": 1.0, "right": 0.5 } }
 ```
 
-Payload fields are engine-defined (typical: per-motor power in `[-1, 1]`).
-Exact payload schema is fixed when the sim server is scaffolded (Phase 2.4).
+Payload schema (MVP iteration 1):
+
+| Field | Type | Range | Meaning |
+|---|---|---|---|
+| `left` | number | `[-1, 1]` | Left motor power (negative = reverse) |
+| `right` | number | `[-1, 1]` | Right motor power (negative = reverse) |
+
+Differential drive. `1.0` = full forward, `-1.0` = full reverse, `0` = stop.
+
+**Note:** This schema is expected to become more complex in a future
+iteration (e.g. per-motor acceleration limits, duration fields). It is
+locked for MVP iteration 1 and should be treated as version 1 of the
+protocol.
 
 #### `sensorSnapshot` — sim → robot
 
@@ -129,8 +140,16 @@ Example:
 { "type": "worldSnapshot", "seq": 142, "simTick": 142, "payload": { "robot": { "x": 2.4, "y": -1.1, "heading": 0.78 } } }
 ```
 
-Payload fields are engine-defined (typical: robot pose, obstacle list).
-Exact schema is fixed when the sim server is scaffolded (Phase 2.3).
+Payload schema (MVP iteration 1):
+
+| Field | Type | Meaning |
+|---|---|---|
+| `robot.x` | number | Robot X position in world units |
+| `robot.y` | number | Robot Y position in world units |
+| `robot.heading` | number | Robot heading in radians (0 = +X axis) |
+
+No obstacles in iteration 1 — bounded box dimensions are hardcoded in the
+visualiser.
 
 #### `userControl` — visualiser → sim (deferred)
 
@@ -170,9 +189,9 @@ readings yet (see section 6.1).
 
 | Channel | Message | Direction | simTick on every message? | MVP iteration 1 | Notes |
 |---------|---------|-----------|---------------------------|-----------------|-------|
-| Robot (`ROBOT_PORT`) | `motorCommand` | robot → sim | Yes | ✅ | Persistent actuator state; last command reused if robot is slow |
+| Robot (`ROBOT_PORT`) | `motorCommand` | robot → sim | Yes | ✅ | Persistent actuator state; last command reused if robot is slow; payload: `{ left, right }` in `[-1, 1]` |
 | Robot (`ROBOT_PORT`) | `sensorSnapshot` | sim → robot | Yes | ✅ (empty payload) | No readings yet; single-slot sensor model deferred to iteration 2 |
-| Visualiser (`VISUALISER_PORT`) | `worldSnapshot` | sim → visualiser | Yes | ✅ | Drop-oldest backpressure; no blocking on visualiser |
+| Visualiser (`VISUALISER_PORT`) | `worldSnapshot` | sim → visualiser | Yes | ✅ | Drop-oldest backpressure; no blocking on visualiser; payload: `{ robot: { x, y, heading } }` |
 | Visualiser (`VISUALISER_PORT`) | `userControl` | visualiser → sim | — | ❌ deferred | Start/pause/reset etc.; future iteration |
 
 ## 10. Deferred beyond MVP
