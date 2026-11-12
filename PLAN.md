@@ -75,11 +75,20 @@ consecutive snapshots.
 Goal: prove the visualiser side of the wire protocol and the hold-last-frame
 interpolation strategy before the sim exists.
 
-### 1.3 Connect visualiser to a stub sim endpoint
-Optional: a tiny Node script that emits hardcoded `worldSnapshot` NDJSON over
-WebSocket on VISUALISER_PORT, so the real visualiser talks to a real socket.
+### 1.3 Connect visualiser to live sim endpoint — COMPLETE
+The visualiser connects to `ws://localhost:VISUALISER_PORT` (8081) and
+renders live `worldSnapshot` messages from the sim with hold-last-frame
+interpolation. Falls back to the hardcoded stream when no sim is connected.
 
-Dependency: 1.1 → 1.2 → 1.3 (sequential).
+Files:
+- `simulator/visualiser/src/liveStream.ts` — WebSocket client, NDJSON parsing,
+  snapshot buffer, interpolation at latest received simTick, auto-reconnect
+- `simulator/visualiser/src/main.ts` — prefers live data; falls back to
+  hardcoded stream; logs source per second
+- `simulator/visualiser/src/snapshotStream.ts` — header comment updated
+  (fallback, not primary)
+
+Dependency: 1.1 → 1.2 → 1.3 (sequential). ✅ All complete.
 
 ---
 

@@ -1,11 +1,10 @@
 import type { WorldSnapshot } from './types';
 
 // ---------------------------------------------------------------------------
-// Hardcoded stream of `worldSnapshot` messages (Phase 1 MVP).
+// Hardcoded stream of `worldSnapshot` messages (fallback).
 //
-// In Phase 3 this array will be replaced by messages received over the
-// visualiser WebSocket channel. Until then it proves the visualiser side of
-// the wire protocol without a sim, a socket, or Java.
+// Used when no live sim is connected to the visualiser WebSocket channel.
+// Proves the visualiser side of the wire protocol without a sim or socket.
 // ---------------------------------------------------------------------------
 
 // World dimensions (hardcoded, world units) — matches the box the renderer draws.
