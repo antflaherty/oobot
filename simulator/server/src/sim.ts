@@ -192,15 +192,16 @@ export class SimEngine {
     };
     this.transport.broadcast("visualiser", worldEnvelope);
 
-    this.maybeLogHz();
-  }
-
-  private maybeLogHz(): void {
+    // Log pose and command every second for debugging the full pipeline.
     this.ticksSinceLog++;
     const now = Date.now();
     if (now - this.logStartTime >= LOG_HZ_INTERVAL_MS) {
       const hz = (this.ticksSinceLog / ((now - this.logStartTime) / 1000)).toFixed(1);
-      log(`achieved ${hz} Hz (tick ${this.simTick})`);
+      const p = this.world.pose;
+      const c = this.latestCommand;
+      log(
+        `achieved ${hz} Hz (tick ${this.simTick}) | pose=(${p.x.toFixed(2)},${p.y.toFixed(2)},heading=${p.heading.toFixed(3)}) | command={ left: ${c.left.toFixed(2)}, right: ${c.right.toFixed(2)} } | robotConn=${this.robotConnectionId ? 'yes' : 'no'}`,
+      );
       this.ticksSinceLog = 0;
       this.logStartTime = now;
     }

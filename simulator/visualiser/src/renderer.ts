@@ -3,15 +3,16 @@ import { WORLD_WIDTH, WORLD_HEIGHT } from './snapshotStream';
 
 // Canvas coordinate mapping (MVP decision, documented here):
 //
-//   world (x, y)      -> canvas pixel (x, y)    1 unit = 1 pixel
+//   world (x, y)      -> canvas pixel (x + 400, y + 300)  1 unit = 1 pixel
 //   heading (radians) -> canvas rotation        0 = points right (+X axis)
 //                                                 positive = counter-clockwise
 //                                                 (mathematical convention)
 //
-// The world is an 800x600 unit box and the canvas is 800x600 px, so the
-// mapping is 1:1 with no scaling or Y-flip. +Y points down on screen
-// (canvas default), so the renderer negates the heading before calling
-// ctx.rotate() to convert from mathematical to screen convention.
+// The world is an 800x600 unit box centred at origin (x ∈ [-400,400],
+// y ∈ [-300,300]) and the canvas is 800x600 px. World origin (0,0) maps to
+// canvas centre (400,300). +Y points down on screen (canvas default), so the
+// renderer negates the heading before calling ctx.rotate() to convert from
+// mathematical to screen convention.
 // This is a rendering convention only; the wire protocol itself is
 // coordinate-system agnostic.
 
@@ -68,8 +69,9 @@ export class Renderer {
   /** Draw the robot as a body circle plus a heading arrow. */
   drawRobot(pose: RobotPose): void {
     const { ctx } = this;
-    const cx = pose.x * this.pxPerUnit;
-    const cy = pose.y * this.pxPerUnit;
+    // World origin (0,0) maps to canvas centre (400,300).
+    const cx = (pose.x + WORLD_WIDTH / 2) * this.pxPerUnit;
+    const cy = (pose.y + WORLD_HEIGHT / 2) * this.pxPerUnit;
 
     ctx.save();
     ctx.translate(cx, cy);

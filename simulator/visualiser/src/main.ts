@@ -77,6 +77,23 @@ function interpolate(
   };
 }
 
+function logRender(pose: RobotPose, source: string, holding: boolean): void {
+  const now = performance.now();
+  if (now - lastLogTime >= LOG_EVERY_MS) {
+    console.log(
+      `[visualiser] render source=${source} tick=${poseTick?.toFixed(0)} ` +
+        `pose=(${pose.x.toFixed(2)},${pose.y.toFixed(2)},heading=${pose.heading.toFixed(3)}) ` +
+        `${holding ? 'holding' : 'interpolating'} frames=${framesRendered}`,
+    );
+    framesRendered = 0;
+    lastLogTime = now;
+  }
+  framesRendered++;
+  poseTick = null;
+}
+
+let poseTick: number | null = null;
+
 function frame(): void {
   const now = performance.now();
 
@@ -90,6 +107,7 @@ function frame(): void {
     if (liveResult) {
       result = liveResult;
       source = result.holding ? 'live (holding)' : 'live';
+      poseTick = latestTick;
     }
   } else {
     const elapsedSec = (now - startTime) / 1000;
@@ -97,20 +115,12 @@ function frame(): void {
     result = interpolate(SNAPSHOTS, playbackTick);
     source =
       playbackTick >= FINAL_SNAPSHOT_TICK ? 'hardcoded (holding)' : 'hardcoded';
+    poseTick = playbackTick;
   }
 
   if (result) {
     renderer.render(result.pose);
-    framesRendered++;
-  }
-
-  if (now - lastLogTime >= LOG_EVERY_MS) {
-    console.log(
-      `[visualiser] frames=${framesRendered} source=${source} ` +
-        `${result ? (result.holding ? 'holding last frame' : 'interpolating') : 'no snapshots'}`,
-    );
-    framesRendered = 0;
-    lastLogTime = now;
+    logRender(result.pose, source, result.holding);
   }
 
   requestAnimationFrame(frame);

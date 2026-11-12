@@ -22,8 +22,8 @@ export interface WorldConfig {
 }
 
 export const DEFAULT_WORLD_CONFIG: WorldConfig = {
-  width: 10,
-  height: 6,
+  width: 800,
+  height: 600,
   maxSpeed: 2.0,
   trackWidth: 0.5,
   tickRate: 60,
