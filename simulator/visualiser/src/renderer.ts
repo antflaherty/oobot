@@ -1,5 +1,6 @@
 import type { RobotPose, WorldSnapshot } from './types';
 import { WORLD_WIDTH, WORLD_HEIGHT } from './snapshotStream';
+import { lerp } from './math';
 
 // Canvas coordinate mapping (MVP decision, documented here):
 //
@@ -29,12 +30,42 @@ const BODY_FILL = '#2563eb';
 const BODY_STROKE = '#1e40af';
 const ARROW_FILL = '#ffffff';
 
+// ---------------------------------------------------------------------------
+// Robot trail configuration.
+//
+// The trail keeps a short history of the robot's world positions and draws
+// them as a fading polyline behind the robot. Tweak `maxPoints` to change
+// how long the trail is (at ~60 fps, 120 points ≈ 2 seconds of history).
+// ---------------------------------------------------------------------------
+export interface TrailConfig {
+  maxPoints: number;   // max number of trail points to retain
+  minAlpha: number;    // alpha for the oldest segment
+  maxAlpha: number;    // alpha for the newest segment
+  color: string;       // base trail colour (hex)
+}
+
+const DEFAULT_TRAIL_CONFIG: TrailConfig = {
+  maxPoints: 120,
+  minAlpha: 0.15,
+  maxAlpha: 0.9,
+  color: '#93c5fd', // light blue
+};
+
+// Ignore points closer than this (world units) to avoid duplicate points
+// while the robot is stationary / the renderer is holding a frame.
+const TRAIL_DEDUP_EPSILON = 0.5;
+
 export class Renderer {
   private readonly ctx: CanvasRenderingContext2D;
   private readonly canvas: HTMLCanvasElement;
   private pxPerUnit: number;
+  private trail: Array<{ x: number; y: number }> = [];
+  private trailConfig: TrailConfig;
 
-  constructor(canvas: HTMLCanvasElement) {
+  constructor(
+    canvas: HTMLCanvasElement,
+    trailConfig: TrailConfig = DEFAULT_TRAIL_CONFIG,
+  ) {
     const ctx = canvas.getContext('2d');
     if (!ctx) {
       throw new Error('Could not obtain 2D rendering context from canvas');
@@ -45,12 +76,71 @@ export class Renderer {
     canvas.width = WORLD_WIDTH;
     canvas.height = WORLD_HEIGHT;
     this.pxPerUnit = 1;
+    this.trailConfig = trailConfig;
   }
 
   /** Clear the whole canvas. */
   clear(): void {
     const { ctx } = this;
     ctx.clearRect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
+  }
+
+  /** Record a robot world position in the trail history. */
+  addTrailPoint(x: number, y: number): void {
+    const last = this.trail[this.trail.length - 1];
+    if (
+      last &&
+      Math.abs(last.x - x) < TRAIL_DEDUP_EPSILON &&
+      Math.abs(last.y - y) < TRAIL_DEDUP_EPSILON
+    ) {
+      return;
+    }
+    this.trail.push({ x, y });
+    if (this.trail.length > this.trailConfig.maxPoints) {
+      this.trail = this.trail.slice(-this.trailConfig.maxPoints);
+    }
+  }
+
+  /** Clear the trail history (e.g. on sim reset). */
+  clearTrail(): void {
+    this.trail = [];
+  }
+
+  /** Replace the trail config at runtime (length/duration/colour). */
+  setTrailConfig(config: Partial<TrailConfig>): void {
+    this.trailConfig = { ...this.trailConfig, ...config };
+  }
+
+  /** Draw the fading trail polyline behind the robot. */
+  drawTrail(): void {
+    const { ctx, trail, trailConfig, pxPerUnit } = this;
+    const n = trail.length;
+    if (n < 2) return;
+
+    // World -> canvas space (same mapping as drawRobot).
+    const pts = trail.map((p) => ({
+      x: (p.x + WORLD_WIDTH / 2) * pxPerUnit,
+      y: (WORLD_HEIGHT / 2 - p.y) * pxPerUnit,
+    }));
+
+    // Draw segment by segment, fading from minAlpha (oldest) to maxAlpha (newest).
+    const denom = n - 2;
+    for (let i = 0; i < n - 1; i++) {
+      const t = denom > 0 ? i / denom : 1;
+      const alpha = lerp(trailConfig.minAlpha, trailConfig.maxAlpha, t);
+
+      ctx.save();
+      ctx.globalAlpha = alpha;
+      ctx.strokeStyle = trailConfig.color;
+      ctx.lineWidth = 2;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(pts[i].x, pts[i].y);
+      ctx.lineTo(pts[i + 1].x, pts[i + 1].y);
+      ctx.stroke();
+      ctx.restore();
+    }
   }
 
   /** Draw the bounded box boundary. */
@@ -107,9 +197,11 @@ export class Renderer {
     ctx.restore();
   }
 
-  /** Render one frame: box + robot at the given (possibly interpolated) pose. */
+  /** Render one frame: box + trail + robot at the given (possibly interpolated) pose. */
   render(pose: RobotPose): void {
+    this.addTrailPoint(pose.x, pose.y);
     this.clear();
+    this.drawTrail();
     this.drawWorld();
     this.drawRobot(pose);
   }
