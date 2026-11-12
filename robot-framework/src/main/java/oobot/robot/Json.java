@@ -22,7 +22,7 @@ final class Json {
     static String writeMotorCommand(long seq, long simTick, double left, double right) {
         return "{\"type\":\"motorCommand\",\"seq\":" + seq
             + ",\"simTick\":" + simTick
-            + ",\"payload\":{\"left\":" + fmt(left) + ",\"right\":" + fmt(right) + "}}";
+            + ",\"payload\":{\"left\":" + fmt(left) + ",\"right\":" + fmt(right) + "}}\n";
     }
 
     static String fmt(double d) {
