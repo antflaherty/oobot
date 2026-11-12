@@ -45,7 +45,7 @@ export interface TrailConfig {
 }
 
 const DEFAULT_TRAIL_CONFIG: TrailConfig = {
-  maxPoints: 600, // super duper long for now (~10s at 60 fps); tweak as needed
+  maxPoints: 3000, // super duper long (~50s at 60 fps) to capture full heart trace
   minAlpha: 0.15,
   maxAlpha: 0.9,
   color: '#93c5fd', // light blue
