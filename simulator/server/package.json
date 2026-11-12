@@ -1,0 +1,25 @@
+{
+  "name": "oobot-sim-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "oobot simulation server MVP — Node.js + TypeScript WebSocket sim with robot and visualiser channels",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "start": "ts-node src/index.ts",
+    "dev": "ts-node src/index.ts",
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["simulation", "robotics", "websocket", "ndjson"],
+  "license": "UNLICENSED",
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.19.0",
+    "@types/ws": "^8.18.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3"
+  }
+}

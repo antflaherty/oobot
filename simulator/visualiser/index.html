@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>oobot visualiser — MVP</title>
+  <style>
+    html, body {
+      margin: 0;
+      height: 100%;
+      background: #111827;
+      color: #e5e7eb;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+    }
+    h1 {
+      margin: 0 0 12px 0;
+      font-size: 1.25rem;
+      font-weight: 600;
+    }
+    canvas {
+      background: #0b1120;
+      border: 2px solid #374151;
+      display: block;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5);
+    }
+    .hint {
+      margin-top: 10px;
+      font-size: 0.85rem;
+      color: #9ca3af;
+    }
+  </style>
+</head>
+<body>
+  <h1>oobot visualiser — MVP (hardcoded snapshot stream)</h1>
+  <canvas id="viz" width="800" height="600"></canvas>
+  <p class="hint">
+    Hold-last-frame + interpolate-to-next (&bull; no extrapolation). No WebSocket,
+    no sim — vanilla TypeScript + canvas only.
+  </p>
+  <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
