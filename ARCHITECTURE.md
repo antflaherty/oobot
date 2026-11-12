@@ -126,6 +126,12 @@ The MVP uses two WebSocket channels from a single sim server process:
     through which the visualiser receives `worldSnapshot` messages and
     can eventually send `userControl` messages.
 
+Both WebSocket servers bind to `host: "localhost"` (loopback only), so
+connections from off-machine interfaces are refused at the socket level.
+Origin is additionally validated on upgrade: only `localhost` origins (or
+no Origin header, for non-browser clients such as the Java robot
+framework) are accepted.
+
 ### Message format
 
 All messages use newline-delimited JSON (NDJSON). Each message carries

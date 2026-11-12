@@ -215,7 +215,7 @@ No `clientType`/`clientId` needed — the channel implies who is talking. Baseli
 ### 6.4 Visualiser discovery
 **Question:** How does the browser discover the sim's WebSocket URL? Hardcoded `localhost:PORT`?
 
-**Decision:** **accepted** — hardcoded `ws://localhost:VISUALISER_PORT` for MVP. User opens `http://localhost:PORT` and the visualiser connects to the sim on the same host. No discovery service.
+**Decision:** **accepted** — hardcoded `ws://localhost:VISUALISER_PORT` for MVP. User opens `http://localhost:PORT` and the visualiser connects to the sim on the same host. No discovery service. The sim server binds both WebSocket sockets to `host: "localhost"` (loopback only), so off-machine connections are refused at the socket level regardless of IP or port.
 
 ---
 

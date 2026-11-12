@@ -14,6 +14,7 @@
 // one unpublished snapshot is queued; a newer snapshot replaces it (drop
 // oldest). Sends are non-blocking; the sim tick never waits on I/O.
 
+import { IncomingMessage } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import {
   Channel,
@@ -31,6 +32,18 @@ function log(...args: unknown[]): void {
 
 function generateConnectionId(): string {
   return crypto.randomUUID();
+}
+
+// Allow connections with no Origin header (non-browser clients such as the
+// Java robot framework) and any localhost origin. Reject everything else —
+// defense in depth on top of the loopback socket bind.
+function isAllowedOrigin(origin: string | undefined): boolean {
+  if (!origin || origin === "null") return true;
+  try {
+    return new URL(origin).hostname === "localhost";
+  } catch {
+    return false;
+  }
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -148,11 +161,25 @@ export class WebSocketTransport implements Transport {
   private handlers: Handlers | null = null;
 
   async listen(options: TransportOptions): Promise<void> {
-    this.robotServer = new WebSocketServer({ port: options.robotPort });
-    this.visualiserServer = new WebSocketServer({ port: options.visualiserPort });
+    this.robotServer = new WebSocketServer({ host: "localhost", port: options.robotPort });
+    this.visualiserServer = new WebSocketServer({ host: "localhost", port: options.visualiserPort });
 
-    this.robotServer.on("connection", (ws: WebSocket) => this.accept(ws, "robot"));
-    this.visualiserServer.on("connection", (ws: WebSocket) => this.accept(ws, "visualiser"));
+    this.robotServer.on("connection", (ws: WebSocket, request: IncomingMessage) => {
+      if (!isAllowedOrigin(request.headers.origin)) {
+        log("rejected websocket connection: origin not allowed");
+        ws.close(1008, "origin not allowed");
+        return;
+      }
+      this.accept(ws, "robot");
+    });
+    this.visualiserServer.on("connection", (ws: WebSocket, request: IncomingMessage) => {
+      if (!isAllowedOrigin(request.headers.origin)) {
+        log("rejected websocket connection: origin not allowed");
+        ws.close(1008, "origin not allowed");
+        return;
+      }
+      this.accept(ws, "visualiser");
+    });
 
     // Surface listen errors clearly.
     this.robotServer.on("error", (err: Error) =>

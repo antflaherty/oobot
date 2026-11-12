@@ -28,7 +28,7 @@ each component so nothing creeps into iteration 1.
 | Sim runs on its own fixed timestep (~60 Hz target), best-effort under load, never blocks; does not wait for robot or visualiser | DESIGN_REVIEW 2.2–2.3; ARCHITECTURE §Timestep and speed control |
 | Visualiser is a client of the sim; it never drives or blocks sim timing | DESIGN_REVIEW 2.4; ARCHITECTURE §Visualiser |
 | Language-independence is a guiding principle, not a hard constraint; no abstraction layer or IDL yet | DESIGN_REVIEW 3.4; ARCHITECTURE §Java robot framework |
-| Localhost only, hardcoded ports, no discovery, no config file | DESIGN_REVIEW 6.1, 6.4 |
+| Localhost only (enforced at socket bind, not just URL strings), hardcoded ports, no discovery, no config file | DESIGN_REVIEW 6.1, 6.4 |
 | Basic console logging only; no metrics | DESIGN_REVIEW 6.7 |
 
 ---
