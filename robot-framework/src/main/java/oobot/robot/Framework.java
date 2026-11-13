@@ -1,5 +1,6 @@
 package oobot.robot;
 
+import java.util.Map;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -43,6 +44,7 @@ public class Framework {
     private final AtomicLong seq = new AtomicLong(0);
     private volatile WsConnection connection;
     private volatile long lastSensorSimTick = 0L;
+    private volatile Double lastSensorDistance = null;
     private volatile boolean running = true;
     private volatile boolean behaviourInitialized = false;
 
@@ -89,6 +91,10 @@ public class Framework {
 
     long lastSensorSimTick() {
         return lastSensorSimTick;
+    }
+
+    Double lastSensorDistance() {
+        return lastSensorDistance;
     }
 
     void onSensorSnapshot(long simTick) {
@@ -193,7 +199,26 @@ public class Framework {
         }
         if ("sensorSnapshot".equals(env.type)) {
             onSensorSnapshot(env.simTick);
+            lastSensorDistance = parseSensorDistance(env.payload);
         }
+    }
+
+    /**
+     * Read the {@code distance} field from a {@code sensorSnapshot} payload.
+     * Returns a {@code Double} when a number is present, {@code null} when the
+     * field is absent or explicitly {@code null} (nothing detected).
+     */
+    private static Double parseSensorDistance(Object payload) {
+        if (!(payload instanceof Map)) {
+            return null; // empty payload (iteration 1) or malformed -> nothing detected
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, Object> p = (Map<String, Object>) payload;
+        Object d = p.get("distance");
+        if (d instanceof Number) {
+            return ((Number) d).doubleValue();
+        }
+        return null; // null or absent -> nothing detected
     }
 
     public void stop() {

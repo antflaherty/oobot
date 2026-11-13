@@ -26,4 +26,19 @@ public final class Sensors {
         }
         return framework.lastSensorSimTick();
     }
+
+    /**
+     * Distance in world units to the nearest obstacle/wall ahead of the robot,
+     * along its front-facing ray.
+     *
+     * @return the distance, or {@code Double.POSITIVE_INFINITY} if nothing is
+     *         detected within range, or if the framework is not connected.
+     */
+    public static double distance() {
+        if (framework == null) {
+            return Double.POSITIVE_INFINITY;
+        }
+        Double d = framework.lastSensorDistance();
+        return d == null ? Double.POSITIVE_INFINITY : d;
+    }
 }
