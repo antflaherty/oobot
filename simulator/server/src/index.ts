@@ -17,11 +17,10 @@
 
 import { WebSocketTransport } from "./transport";
 import { SimEngine } from "./sim";
-import { TransportOptions, RobotPose } from "./types";
+import { TransportOptions, RobotPose, Obstacle } from "./types";
 import {
   loadWorldFile,
   WorldConfig,
-  Obstacle,
 } from "./world";
 import * as path from "path";
 

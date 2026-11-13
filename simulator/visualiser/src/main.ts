@@ -119,7 +119,8 @@ function frame(): void {
   }
 
   if (result) {
-    renderer.render(result.pose);
+    const obstacles = liveStream.getObstacles();
+    renderer.render(result.pose, obstacles);
     logRender(result.pose, source, result.holding);
   }
 

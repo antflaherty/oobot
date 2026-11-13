@@ -77,7 +77,7 @@ export const SNAPSHOTS: WorldSnapshot[] = (() => {
       type: 'worldSnapshot',
       seq: seq++,
       simTick: tick,
-      payload: { robot: { x: pose.x, y: pose.y, heading: pose.heading } },
+      payload: { robot: { x: pose.x, y: pose.y, heading: pose.heading }, obstacles: [] },
     });
   }
   return snaps;

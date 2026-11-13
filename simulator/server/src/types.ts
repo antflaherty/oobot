@@ -46,8 +46,19 @@ export interface MotorCommandPayload {
   right: number; // [-1, 1]
 }
 
+// Axis-aligned box obstacle (centre-based convention).
+// (x, y) is the centre; width/height are full dimensions. Box spans
+// [x - width/2, x + width/2] x [y - height/2, y + height/2].
+export interface Obstacle {
+  x: number;   // centre X, world units
+  y: number;   // centre Y, world units
+  width: number;  // full width, world units
+  height: number; // full height, world units
+}
+
 export interface WorldSnapshotPayload {
   robot: { x: number; y: number; heading: number }; // heading: radians, 0 = +X axis
+  obstacles: Obstacle[]; // static obstacles (iteration 2)
 }
 
 export interface SensorSnapshotPayload {

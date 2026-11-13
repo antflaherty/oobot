@@ -26,20 +26,6 @@ export interface WorldConfig {
   tickRate: number;   // sim steps per second (~60)
 }
 
-// Axis-aligned box obstacle.
-//
-// Convention: centre-based. (x, y) is the centre of the box in world units and
-// width/height are its full dimensions, so the box spans
-// [x - width/2, x + width/2] x [y - height/2, y + height/2]. This matches the
-// world box being centred at the origin and the robot pose being a point at
-// (x, y).
-export interface Obstacle {
-  x: number;   // centre X, world units
-  y: number;   // centre Y, world units
-  width: number;  // full width, world units
-  height: number; // full height, world units
-}
-
 export const DEFAULT_WORLD_CONFIG: WorldConfig = {
   width: 800,
   height: 600,
@@ -49,7 +35,7 @@ export const DEFAULT_WORLD_CONFIG: WorldConfig = {
   tickRate: 60,
 };
 
-import { RobotPose } from "./types";
+import { Obstacle, RobotPose } from "./types";
 
 export const DEFAULT_START_POSE: RobotPose = { x: 0, y: 0, heading: 0 };
 

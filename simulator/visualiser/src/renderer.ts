@@ -1,4 +1,4 @@
-import type { RobotPose, WorldSnapshot } from './types';
+import type { RobotPose, WorldSnapshot, Obstacle } from './types';
 import { WORLD_WIDTH, WORLD_HEIGHT } from './snapshotStream';
 import { lerp } from './math';
 
@@ -29,6 +29,8 @@ const BOX_STROKE = '#374151';
 const BODY_FILL = '#2563eb';
 const BODY_STROKE = '#1e40af';
 const ARROW_FILL = '#ffffff';
+const OBSTACLE_FILL = '#4b5563';
+const OBSTACLE_STROKE = '#111827';
 
 // ---------------------------------------------------------------------------
 // Robot trail configuration.
@@ -160,6 +162,25 @@ export class Renderer {
     ctx.stroke();
   }
 
+  /** Draw static obstacles as filled rectangles. */
+  drawObstacles(obstacles: Obstacle[]): void {
+    const { ctx } = this;
+    for (const obs of obstacles) {
+      const cx = (obs.x - obs.width / 2 + WORLD_WIDTH / 2);
+      const cy = (WORLD_HEIGHT / 2 - (obs.y + obs.height / 2));
+      const w = obs.width;
+      const h = obs.height;
+
+      ctx.save();
+      ctx.fillStyle = OBSTACLE_FILL;
+      ctx.strokeStyle = OBSTACLE_STROKE;
+      ctx.lineWidth = 1;
+      ctx.fillRect(cx, cy, w, h);
+      ctx.strokeRect(cx, cy, w, h);
+      ctx.restore();
+    }
+  }
+
   /** Draw the robot as a body circle plus a heading arrow. */
   drawRobot(pose: RobotPose): void {
     const { ctx } = this;
@@ -197,12 +218,13 @@ export class Renderer {
     ctx.restore();
   }
 
-  /** Render one frame: box + trail + robot at the given (possibly interpolated) pose. */
-  render(pose: RobotPose): void {
+  /** Render one frame: box + obstacles + trail + robot at the given (possibly interpolated) pose. */
+  render(pose: RobotPose, obstacles: Obstacle[] = []): void {
     this.addTrailPoint(pose.x, pose.y);
     this.clear();
     this.drawTrail();
     this.drawWorld();
+    this.drawObstacles(obstacles);
     this.drawRobot(pose);
   }
 }

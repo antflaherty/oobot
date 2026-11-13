@@ -7,7 +7,7 @@
 // times so the renderer can interpolate between them on each render frame.
 // ---------------------------------------------------------------------------
 
-import type { WorldSnapshot, RobotPose } from './types';
+import type { WorldSnapshot, RobotPose, Obstacle } from './types';
 import { angleLerp, clamp01, lerp } from './math';
 
 const VISUALISER_PORT = 8081;
@@ -32,6 +32,7 @@ export class LiveStream {
   private latestTick = -1;
   private connected = false;
   private reconnectTimer: number | null = null;
+  private latestObstacles: Obstacle[] = [];
 
   // Reference point for the continuously advancing render clock.
   // renderTick = baseTick + (now - baseTime) * TICKS_PER_SECOND / 1000
@@ -60,6 +61,11 @@ export class LiveStream {
 
   getLatestTick(): number | null {
     return this.latestTick >= 0 ? this.latestTick : null;
+  }
+
+  /** Returns the latest static obstacle set (empty array if none). */
+  getObstacles(): Obstacle[] {
+    return this.latestObstacles;
   }
 
   /** Interpolate the robot pose at the given wall-clock render time. */
@@ -173,6 +179,10 @@ export class LiveStream {
     };
     this.snapshots.push(buffered);
     this.latestTick = snapshot.simTick;
+
+    // Obstacles are static but re-cache on each snapshot in case the world
+    // changes (e.g. reload). Default to empty if absent.
+    this.latestObstacles = snapshot.payload.obstacles ?? [];
 
     // Rebase the render clock to the newest snapshot.
     this.rebase(buffered);

@@ -9,7 +9,7 @@
 // Wires into the encapsulated Transport interface (specs/COMMS.md §2). The
 // concrete WebSocketTransport is constructed in index.ts.
 
-import { Transport, RobotPose } from "./types";
+import { Obstacle, Transport, RobotPose } from "./types";
 import {
   Channel,
   Handlers,
@@ -21,7 +21,6 @@ import {
   WorldConfig,
   WorldModel,
   DEFAULT_WORLD_CONFIG,
-  Obstacle,
   DEFAULT_START_POSE,
 } from "./world";
 import { castFrontRay } from "./sensor";
@@ -217,7 +216,10 @@ export class SimEngine {
       type: "worldSnapshot",
       seq: 0, // assigned per-connection by the transport on send
       simTick: this.simTick,
-      payload: { robot: { ...this.world.pose } },
+      payload: {
+        robot: { ...this.world.pose },
+        obstacles: this.world.obstacles,
+      },
     };
     this.transport.broadcast("visualiser", worldEnvelope);
 
