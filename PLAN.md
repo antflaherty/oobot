@@ -107,7 +107,8 @@ visualisers. Drop-oldest backpressure if a client falls behind.
 
 ### 2.4 Robot channel: accept connections, handle `motorCommand`, publish `sensorSnapshot`
 Store latest command per robot (persistent actuator state). On WebSocket close,
-stop motors (safe stop). Publish `sensorSnapshot` (empty/no readings for MVP).
+stop motors (safe stop). Publish `sensorSnapshot` each tick carrying `front`
+and `right` proximity readings (each a number or `null`).
 
 Dependency: 2.1 → 2.2 → 2.3, and 2.1 → 2.4. (2.3 and 2.4 can be parallel
 once 2.1 is done, but both need the wire protocol spec.)
@@ -141,8 +142,8 @@ Starts sim server, visualiser dev server, and example robot controller together.
 1. Sim runs independently of browser.
 2. Java process connects to sim.
 3. Motor commands move the robot.
-4. Sensor readings provided (empty for MVP).
-5. Controller changes behaviour based on readings (square trace).
+4. Sensor readings provided (`front` and `right` proximity in `sensorSnapshot`).
+5. Controller changes behaviour based on readings (wall-follow-right).
 6. Visualiser shows behaviour without controlling sim timing.
 7. Controller disconnect → robot stops.
 

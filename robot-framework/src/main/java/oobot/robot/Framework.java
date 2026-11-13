@@ -45,6 +45,7 @@ public class Framework {
     private volatile WsConnection connection;
     private volatile long lastSensorSimTick = 0L;
     private volatile Double lastSensorDistance = null;
+    private volatile Double lastRightDistance = null;
     private volatile boolean running = true;
     private volatile boolean behaviourInitialized = false;
 
@@ -95,6 +96,10 @@ public class Framework {
 
     Double lastSensorDistance() {
         return lastSensorDistance;
+    }
+
+    Double lastRightDistance() {
+        return lastRightDistance;
     }
 
     void onSensorSnapshot(long simTick) {
@@ -199,22 +204,23 @@ public class Framework {
         }
         if ("sensorSnapshot".equals(env.type)) {
             onSensorSnapshot(env.simTick);
-            lastSensorDistance = parseSensorDistance(env.payload);
+            lastSensorDistance = parseSensorDistance(env.payload, "front");
+            lastRightDistance = parseSensorDistance(env.payload, "right");
         }
     }
 
     /**
-     * Read the {@code distance} field from a {@code sensorSnapshot} payload.
+     * Read a numeric distance field from a {@code sensorSnapshot} payload.
      * Returns a {@code Double} when a number is present, {@code null} when the
      * field is absent or explicitly {@code null} (nothing detected).
      */
-    private static Double parseSensorDistance(Object payload) {
+    private static Double parseSensorDistance(Object payload, String field) {
         if (!(payload instanceof Map)) {
-            return null; // empty payload (iteration 1) or malformed -> nothing detected
+            return null; // empty payload or malformed -> nothing detected
         }
         @SuppressWarnings("unchecked")
         Map<String, Object> p = (Map<String, Object>) payload;
-        Object d = p.get("distance");
+        Object d = p.get(field);
         if (d instanceof Number) {
             return ((Number) d).doubleValue();
         }

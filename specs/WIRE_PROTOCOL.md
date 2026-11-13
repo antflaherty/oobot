@@ -114,14 +114,30 @@ protocol.
 Published by the sim on each tick (or as configured). The robot reads the
 latest available value on its behaviour loop (~20 Hz).
 
-For **MVP iteration 1 there are no sensors**, so `sensorSnapshot` carries no
-meaningful readings yet — its payload is empty/placeholder. It remains part
-of the protocol so iteration 2 can add readings without a protocol change.
+The sim casts two front-facing proximity rays each tick — one along the
+robot's heading (front) and one at 90 degrees to its right — and publishes the
+nearest hit among obstacles and world box edges for each. The payload carries
+both readings; a reading is `null` when nothing is detected in that direction.
 
-Example (iteration 1):
+Payload schema:
+
+| Field   | Type    | Meaning                                               | Presence                        |
+|---------|---------|-------------------------------------------------------|---------------------------------|
+| `front` | number \| null | Distance in world units to nearest hit ahead along the front-facing ray | present when something detected |
+| `right` | number \| null | Distance in world units to nearest hit ahead along the right-facing ray (heading - PI/2) | present when something detected |
+
+`simTick` is on the envelope as always (source of truth for staleness).
+
+Example — front wall 3.5 units ahead, right wall 12 units away:
 
 ```json
-{ "type": "sensorSnapshot", "seq": 33, "simTick": 142, "payload": {} }
+{ "type": "sensorSnapshot", "seq": 7, "simTick": 142, "payload": { "front": 3.5, "right": 12.0 } }
+```
+
+Example — nothing detected ahead or to the right:
+
+```json
+{ "type": "sensorSnapshot", "seq": 8, "simTick": 143, "payload": { "front": null, "right": null } }
 ```
 
 ### 6.2 Visualiser channel
@@ -171,26 +187,28 @@ schema is defined yet.
 
 ## 8. Sensor model
 
-The sim maintains the **latest sensor value + `simTick` in a single slot**,
+The sim maintains the **latest sensor values + `simTick` in a single slot**,
 overwriting it each tick:
 
 - No queue.
 - No polling.
+- Two readings per slot: `front` (along the robot's heading) and `right` (at
+  90 degrees to the robot's right). Each is the nearest hit among obstacles and
+  world box edges, or `null` when nothing is detected in that direction.
 - If the sim runs at 60 Hz and the robot reads at 20 Hz, ~2/3 of samples are
   silently dropped by being overwritten; the robot always sees the most
   recent reading.
 - `simTick` is on every reading so a behaviour can check staleness later if
   needed, but no maximum-staleness check is required for MVP.
 
-For MVP iteration 1 there are no sensors, so `sensorSnapshot` carries no
-readings yet (see section 6.1).
+The `sensorSnapshot` payload carries `{ front, right }` (see section 6.1).
 
 ## 9. Summary table: message types per channel
 
 | Channel | Message | Direction | simTick on every message? | MVP iteration 1 | Notes |
 |---------|---------|-----------|---------------------------|-----------------|-------|
 | Robot (`ROBOT_PORT`) | `motorCommand` | robot → sim | Yes | ✅ | Persistent actuator state; last command reused if robot is slow; payload: `{ left, right }` in `[-1, 1]` |
-| Robot (`ROBOT_PORT`) | `sensorSnapshot` | sim → robot | Yes | ✅ (empty payload) | No readings yet; single-slot sensor model deferred to iteration 2 |
+| Robot (`ROBOT_PORT`) | `sensorSnapshot` | sim → robot | Yes | ✅ | Single-slot sensor model; payload: `{ front, right }`, each a number or `null` when nothing detected |
 | Visualiser (`VISUALISER_PORT`) | `worldSnapshot` | sim → visualiser | Yes | ✅ | Drop-oldest backpressure; no blocking on visualiser; payload: `{ robot: { x, y, heading } }` |
 | Visualiser (`VISUALISER_PORT`) | `userControl` | visualiser → sim | — | ❌ deferred | Start/pause/reset etc.; future iteration |
 
@@ -203,4 +221,3 @@ readings yet (see section 6.1).
 - Robot IDs / multi-robot support.
 - Formal error protocol (malformed JSON is logged and ignored).
 - World file format and static obstacles (iteration 2).
-- Sensor readings in `sensorSnapshot` (iteration 2).

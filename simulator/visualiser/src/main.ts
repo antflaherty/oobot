@@ -30,6 +30,9 @@ const renderer = new Renderer(canvas);
 
 const liveStream = new LiveStream();
 liveStream.start();
+// Record trail points from the authoritative snapshot stream so the path keeps
+// tracing while the tab is hidden (render frames pause there).
+liveStream.setTrailPointCallback((x, y) => renderer.addTrailPoint(x, y));
 
 let startTime = performance.now();
 let lastLogTime = startTime;
@@ -119,6 +122,12 @@ function frame(): void {
   }
 
   if (result) {
+    // Fallback hardcoded stream isn't fed through LiveStream, so record a trail
+    // point per rendered frame here (live path is recorded via the callback above).
+    if (!liveStream.isConnected()) {
+      renderer.addTrailPoint(result.pose.x, result.pose.y);
+    }
+
     const obstacles = liveStream.getObstacles();
     renderer.render(result.pose, obstacles);
     logRender(result.pose, source, result.holding);

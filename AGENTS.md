@@ -117,7 +117,7 @@ Full spec: `specs/WIRE_PROTOCOL.md`. Transport interface: `specs/COMMS.md`.
 interface RobotBehaviour { void init(); void update(); }      // ~20 Hz
 interface Mover { void forward(); void turnRight(); void turnLeft(); void stop(); }
 class Motor { static void setSpeed(double speed); }           // [-1, 1]
-class Sensors { static long latestSimTick(); }                // iteration 1: tick only
+class Sensors { static long latestSimTick(); static double distance(); static double rightDistance(); }   // front + right proximity readings
 ```
 
 Example behaviours implement `RobotBehaviour` and command movement via `Mover`.
@@ -130,7 +130,7 @@ WebSocket, NDJSON framing, reconnection, and concurrency.
 - Java: plain `javac`/`jar`, **no Maven or Gradle**, zero external dependencies. JDK 21+.
 - Simulation owns world state; robot code only commands hardware via the framework.
 - Rendering never drives or blocks simulation timing. Sim runs on its own fixed ~60 Hz timestep.
-- Keep the MVP small. Defer: obstacles, sensors with readings, heartbeat, multiple robots, tests.
+- Keep the MVP small. Defer: obstacles with complex shapes, heartbeat, multiple robots, tests.
 - No test files exist yet in any component.
 
 ## Where specs live (reference, rarely need editing)

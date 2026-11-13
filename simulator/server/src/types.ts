@@ -62,7 +62,8 @@ export interface WorldSnapshotPayload {
 }
 
 export interface SensorSnapshotPayload {
-  distance: number | null; // world units to nearest hit ahead, or null if nothing detected
+  front: number | null;  // world units to nearest hit ahead (front-facing), or null if nothing detected
+  right: number | null; // world units to nearest hit to the right (90 deg), or null if nothing detected
 }
 
 export interface RobotPose {

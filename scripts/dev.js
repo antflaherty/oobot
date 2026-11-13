@@ -58,7 +58,7 @@ async function main() {
   const robot = spawnCmd(
     'robot',
     'java',
-    ['-jar', 'robot-framework/robot.jar', '--host', 'localhost', '--port', '8080', '--behaviour', 'wall-avoid'],
+    ['-jar', 'robot-framework/robot.jar', '--host', 'localhost', '--port', '8080', '--behaviour', 'wall-follow-right'],
     root
   );
 

@@ -1,11 +1,9 @@
-# Sensor Specification — Iteration 2
+# Sensor Specification
 
 Object Oriented Robotics (oobot)
 
-**Status:** draft — refinement of the informal `specs/SENSORS.md` notes.
-Not yet implemented. Sensors are deferred beyond MVP iteration 1 (see
-`DESIGN_REVIEW.md` §5.1, `specs/WIRE_PROTOCOL.md` §10). Sensors and obstacles
-arrive together in iteration 2.
+**Status:** implemented — two front-proximity sensors (front-facing and
+right-facing at 90 degrees) on the `sensorSnapshot` robot channel.
 
 ---
 
@@ -40,41 +38,42 @@ perception half of the sense→plan→act loop:
 
 ## 3. Sensor model
 
-### 3.1 Single front-mounted proximity sensor
+### 3.1 Two front-proximity sensors
 
-One sensor, rigidly mounted facing the robot's forward direction (its current
-heading).
+Two proximity sensors, each casting a single ray (half-line) from the robot's
+current position `(x, y)` (robot is a point):
 
-- **Origin:** robot's current position `(x, y)` (robot is a point).
-- **Direction:** robot's current heading (radians, 0 = +X axis).
-- **Shape:** a single ray (half-line) extending from the robot in its heading
-  direction.
-- **Range:** infinite by default — the ray extends until it hits something or
-  reaches the world bounds. A configurable `maxRange` may cap it later
-  (open question §9.5).
+| Sensor | Direction | Mount |
+|--------|-----------|-------|
+| `front` | robot's current heading (radians, 0 = +X axis) | facing forward |
+| `right` | robot's heading minus PI/2 (90 degrees to the right) | facing right |
 
-### 3.2 What the ray detects
+- **Origin:** robot's current position `(x, y)` for both sensors.
+- **Range:** infinite by default — each ray extends until it hits something or
+  reaches the world bounds. A configurable `maxRange` may cap it later.
 
-The ray reports the distance to the **nearest hit** among:
+### 3.2 What each ray detects
 
-1. **Obstacles** (static, defined by the iteration-2 world file; see
-   `specs/WORLD_FORMAT.md` iteration 2).
+Each ray reports the distance to the **nearest hit** among:
+
+1. **Obstacles** (static, defined by the world file; see
+   `specs/WORLD_FORMAT.md`).
 2. **Box edges** (the bounded world box treated as walls).
 
 If nothing is hit within range, the reading is "nothing detected"
-(represented as `null` / absent on the wire, `Double.POSITIVE_INFINITY` in the
-Java API).
+(represented as `null` on the wire, `Double.POSITIVE_INFINITY` in the Java API).
 
-### 3.3 Reading value
+### 3.3 Reading values
 
-Each reading carries:
+Each `sensorSnapshot` carries both readings:
 
-- `distance` — world units from the robot's front to the nearest hit, ≥ 0.
-- `simTick` — the sim tick the reading was computed on (on the envelope, not
+- `front` — world units from the robot's front to the nearest hit, ≥ 0.
+- `right` — world units from the robot's right to the nearest hit, ≥ 0.
+- `simTick` — the sim tick the readings were computed on (on the envelope, not
   the payload).
 
-Robot code uses `distance` to decide behaviour (e.g. "if `distance < threshold`,
-turn away").
+Robot code uses `front` and `right` to decide behaviour (e.g. "if `right >
+threshold`, steer toward the wall").
 
 ---
 
@@ -83,29 +82,29 @@ turn away").
 `sensorSnapshot` (sim → robot, robot channel) gains a payload. The envelope
 stays `{ type, seq, simTick, payload }`.
 
-Payload schema (iteration 2):
+Payload schema:
 
 ```json
-{ "type": "sensorSnapshot", "seq": 7, "simTick": 142, "payload": { "distance": 3.5 } }
+{ "type": "sensorSnapshot", "seq": 7, "simTick": 142, "payload": { "front": 3.5, "right": 12.0 } }
 ```
 
 | Field   | Type    | Meaning                                               | Presence                        |
 |---------|---------|-------------------------------------------------------|---------------------------------|
-| `distance` | number | Distance in world units to nearest hit along front ray, ≥ 0 | present when something detected |
-| `distance` | null   | Nothing detected within range                         | present when nothing detected   |
+| `front` | number \| null | Distance in world units to nearest hit along front ray, ≥ 0 | present when something detected |
+| `right` | number \| null | Distance in world units to nearest hit along right ray, ≥ 0 | present when something detected |
 
 `simTick` is on the envelope as always (source of truth for staleness).
 
-Example — something detected 3.5 world units ahead:
+Example — front wall 3.5 units ahead, right wall 12 units away:
 
 ```json
-{ "type": "sensorSnapshot", "seq": 7, "simTick": 142, "payload": { "distance": 3.5 } }
+{ "type": "sensorSnapshot", "seq": 7, "simTick": 142, "payload": { "front": 3.5, "right": 12.0 } }
 ```
 
-Example — nothing detected:
+Example — nothing detected ahead or to the right:
 
 ```json
-{ "type": "sensorSnapshot", "seq": 8, "simTick": 143, "payload": { "distance": null } }
+{ "type": "sensorSnapshot", "seq": 8, "simTick": 143, "payload": { "front": null, "right": null } }
 ```
 
 ### 4.1 What does NOT change
@@ -150,11 +149,9 @@ an axis); distance to that edge is computable analytically.
 
 ### 5.3 When readings are available
 
-- **Iteration 1 (current):** no obstacles exist → sensor always reports nothing
-  detected. `sensorSnapshot` payload stays `{}` (placeholder), as today.
-- **Iteration 2:** obstacles loaded from the world file → sensor reports real
-  readings. The sim and world file arrive together; there is no sensor without
-  something to sense.
+- **Now:** obstacles loaded from the world file → sensor reports real readings
+  for both `front` and `right`. The sim and world file arrive together; there is
+  no sensor without something to sense.
 
 ---
 
@@ -195,18 +192,33 @@ public final class Sensors {
         }
         return framework.lastSensorDistance();
     }
+
+    /**
+     * Distance in world units to the nearest obstacle/wall to the right of the
+     * robot, along a ray at 90 degrees to its heading.
+     *
+     * @return the distance, or {@code Double.POSITIVE_INFINITY} if nothing is
+     *         detected within range.
+     */
+    public static double rightDistance() {
+        if (framework == null) {
+            return Double.POSITIVE_INFINITY;
+        }
+        return framework.lastRightDistance();
+    }
 }
 ```
 
-- `latestSimTick()` already exists in iteration 1 (returns the tick of the last
-  empty `sensorSnapshot`). Reused unchanged.
-- `distance()` is new in iteration 2. The framework keeps the latest sensor
-  slot (overwrite each tick) and exposes it here. Robot code calls this in
-  `RobotBehaviour.update()` (~20 Hz).
+- `latestSimTick()` already exists (returns the tick of the last
+  `sensorSnapshot`). Reused unchanged.
+- `distance()` (front) and `rightDistance()` are new. The framework keeps the
+  latest sensor slot (overwrite each tick) and exposes both here. Robot code
+  calls these in `RobotBehaviour.update()` (~20 Hz).
 
-The framework needs one new piece of state: `lastSensorDistance` (a
-`volatile Double`, `null` when nothing detected), set when parsing a
-`sensorSnapshot` envelope whose payload contains `distance`.
+The framework needs two new pieces of state: `lastSensorDistance` (front) and
+`lastRightDistance` (right), both `volatile Double`, `null` when nothing
+detected, set when parsing a `sensorSnapshot` envelope whose payload contains
+`front` / `right`.
 
 ### 6.2 OOP / dependency injection
 
@@ -241,22 +253,19 @@ If desired later: the sim could include the sensor ray end-point in
 ## 8. In scope / out of scope (iteration 2)
 
 **In scope:**
-- One front-mounted proximity sensor (single ray).
-- Ray vs. obstacle intersection (obstacle shapes from the iteration-2 world
-  file).
-- `sensorSnapshot` payload with `distance` (number or `null` for nothing
-  detected).
-- `Sensors.distance()` Java API; existing `latestSimTick()` reused.
-- Sim computes + publishes one reading each tick (single-slot, no queue).
+- Two front-proximity sensors: `front` (facing heading) and `right` (90 degrees to the right).
+- Ray vs. obstacle intersection (obstacle shapes from the world file).
+- `sensorSnapshot` payload with `front` and `right` (number or `null` for nothing detected).
+- `Sensors.distance()` and `Sensors.rightDistance()` Java API; `latestSimTick()` reused.
+- Sim computes + publishes both readings each tick (single-slot, no queue).
 
 **Out of scope:**
-- More than one sensor (left/right pair, scanning sensor) — `FUTURE.md`.
+- More than two sensors (left sensor, scanning sensor) — `FUTURE.md`.
 - Sensor visualisation on the canvas.
 - Moving obstacles.
 - Sensor-based maze solving / goal-seeking (OOS: "A goal").
 - Configurable sensor mount angle/offset (fixed facing forward at robot centre).
 - A mockable `Sensor` interface / DI for testing.
-- World file parsing lives in `specs/WORLD_FORMAT.md` iteration 2, not here.
 
 ---
 
@@ -264,8 +273,8 @@ If desired later: the sim could include the sensor ray end-point in
 
 | # | Question | Decision |
 |---|----------|----------|
-| 9.1 | Box edges as detectable walls? | **Yes** — the front ray reports the nearest hit among obstacles and the world box edges. Lets a robot wall-follow in an empty box; cheap analytic math. |
-| 9.2 | Nothing-detected representation? | **`"distance": null`** when nothing detected; Java maps null → `Double.POSITIVE_INFINITY`. |
+| 9.1 | Box edges as detectable walls? | **Yes** — each ray reports the nearest hit among obstacles and the world box edges. Lets a robot wall-follow in an empty box; cheap analytic math. |
+| 9.2 | Nothing-detected representation? | **`"front": null` / `"right": null`** when nothing detected in that direction; Java maps null → `Double.POSITIVE_INFINITY`. |
 | 9.3 | Obstacle shapes? | **Axis-aligned boxes (walls)** to start. Circles can be added later. |
 | 9.4 | Sensor mount? | **Fixed at robot centre, facing heading.** Robot is currently a point; keep it simple. Future non-point robots may need a configurable offset/angle — revisit then. |
 | 9.5 | Range cap? | **Infinite within the box** — box edges act as the backstop (per 9.1). No `maxRange` config for iteration 2. |

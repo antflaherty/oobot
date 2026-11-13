@@ -1,6 +1,6 @@
-import type { RobotPose, WorldSnapshot, Obstacle } from './types';
-import { WORLD_WIDTH, WORLD_HEIGHT } from './snapshotStream';
-import { lerp } from './math';
+import type { RobotPose, WorldSnapshot, Obstacle } from "./types";
+import { WORLD_WIDTH, WORLD_HEIGHT } from "./snapshotStream";
+import { lerp } from "./math";
 
 // Canvas coordinate mapping (MVP decision, documented here):
 //
@@ -25,12 +25,12 @@ const ROBOT_RADIUS = 7;
 const ARROW_LENGTH = 18;
 const ARROW_WIDTH = 4;
 
-const BOX_STROKE = '#374151';
-const BODY_FILL = '#2563eb';
-const BODY_STROKE = '#1e40af';
-const ARROW_FILL = '#ffffff';
-const OBSTACLE_FILL = '#4b5563';
-const OBSTACLE_STROKE = '#111827';
+const BOX_STROKE = "#374151";
+const BODY_FILL = "#2563eb";
+const BODY_STROKE = "#1e40af";
+const ARROW_FILL = "#ffffff";
+const OBSTACLE_FILL = "#4b5563";
+const OBSTACLE_STROKE = "#111827";
 
 // ---------------------------------------------------------------------------
 // Robot trail configuration.
@@ -40,17 +40,17 @@ const OBSTACLE_STROKE = '#111827';
 // how long the trail is (at ~60 fps, 120 points ≈ 2 seconds of history).
 // ---------------------------------------------------------------------------
 export interface TrailConfig {
-  maxPoints: number;   // max number of trail points to retain
-  minAlpha: number;    // alpha for the oldest segment
-  maxAlpha: number;    // alpha for the newest segment
-  color: string;       // base trail colour (hex)
+  maxPoints: number; // max number of trail points to retain
+  minAlpha: number; // alpha for the oldest segment
+  maxAlpha: number; // alpha for the newest segment
+  color: string; // base trail colour (hex)
 }
 
 const DEFAULT_TRAIL_CONFIG: TrailConfig = {
-  maxPoints: 3000, // super duper long (~50s at 60 fps) to capture full heart trace
+  maxPoints: 100,
   minAlpha: 0.15,
   maxAlpha: 0.9,
-  color: '#93c5fd', // light blue
+  color: "#93c5fd", // light blue
 };
 
 // Ignore points closer than this (world units) to avoid duplicate points
@@ -68,9 +68,9 @@ export class Renderer {
     canvas: HTMLCanvasElement,
     trailConfig: TrailConfig = DEFAULT_TRAIL_CONFIG,
   ) {
-    const ctx = canvas.getContext('2d');
+    const ctx = canvas.getContext("2d");
     if (!ctx) {
-      throw new Error('Could not obtain 2D rendering context from canvas');
+      throw new Error("Could not obtain 2D rendering context from canvas");
     }
     this.ctx = ctx;
     this.canvas = canvas;
@@ -135,8 +135,8 @@ export class Renderer {
       ctx.globalAlpha = alpha;
       ctx.strokeStyle = trailConfig.color;
       ctx.lineWidth = 2;
-      ctx.lineCap = 'round';
-      ctx.lineJoin = 'round';
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
       ctx.beginPath();
       ctx.moveTo(pts[i].x, pts[i].y);
       ctx.lineTo(pts[i + 1].x, pts[i + 1].y);
@@ -155,7 +155,7 @@ export class Renderer {
     ctx.stroke();
 
     // Subtle inner rect so the box edge is visible against dark backgrounds.
-    ctx.strokeStyle = '#1f2937';
+    ctx.strokeStyle = "#1f2937";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.rect(2, 2, WORLD_WIDTH - 4, WORLD_HEIGHT - 4);
@@ -166,8 +166,8 @@ export class Renderer {
   drawObstacles(obstacles: Obstacle[]): void {
     const { ctx } = this;
     for (const obs of obstacles) {
-      const cx = (obs.x - obs.width / 2 + WORLD_WIDTH / 2);
-      const cy = (WORLD_HEIGHT / 2 - (obs.y + obs.height / 2));
+      const cx = obs.x - obs.width / 2 + WORLD_WIDTH / 2;
+      const cy = WORLD_HEIGHT / 2 - (obs.y + obs.height / 2);
       const w = obs.width;
       const h = obs.height;
 
@@ -218,9 +218,13 @@ export class Renderer {
     ctx.restore();
   }
 
-  /** Render one frame: box + obstacles + trail + robot at the given (possibly interpolated) pose. */
+  /** Render one frame: box + obstacles + trail + robot at the given (possibly interpolated) pose.
+   *
+   * Trail points are recorded by the stream (LiveStream / snapshotStream) as snapshots
+   * arrive, not here per render frame, so the trail keeps tracing while the tab is hidden
+   * (requestAnimationFrame pauses) instead of drawing one jump line on return.
+   */
   render(pose: RobotPose, obstacles: Obstacle[] = []): void {
-    this.addTrailPoint(pose.x, pose.y);
     this.clear();
     this.drawTrail();
     this.drawWorld();

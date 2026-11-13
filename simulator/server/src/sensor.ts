@@ -25,16 +25,23 @@ export interface BoxBounds {
 }
 
 /**
- * Distance from the robot's position along its heading to the nearest world
- * box edge ahead of it.
+ * Distance from the robot's position along a given heading to the nearest
+ * world box edge ahead of it.
  *
  * Heading is in radians, 0 = +X axis. Direction (cos, sin) is a unit vector,
  * so the returned distance is in world units.
  *
+ * @param headingOverride - if provided, casts along this heading instead of
+ *        pose.heading (used for off-front sensors such as a right-facing ray).
  * @returns distance in world units (>= 0), or null if no finite hit.
  */
-export function castFrontRay(pose: RobotPose, bounds: BoxBounds): number | null {
-  const { x, y, heading } = pose;
+export function castFrontRay(
+  pose: RobotPose,
+  bounds: BoxBounds,
+  headingOverride?: number,
+): number | null {
+  const { x, y } = pose;
+  const heading = headingOverride ?? pose.heading;
   const dx = Math.cos(heading);
   const dy = Math.sin(heading);
 

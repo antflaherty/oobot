@@ -63,10 +63,14 @@ export class SimEngine {
   // robot.
   private latestCommand: MotorCommandPayload = { left: 0, right: 0 };
 
-  // Single-slot sensor state: latest front-proximity reading, overwritten
-  // each tick (no queue). distance is null when nothing is detected.
-  private latestSensor: { distance: number | null; simTick: number } | null =
-    null;
+  // Single-slot sensor state: latest front/right proximity readings,
+  // overwritten each tick (no queue). Each distance is null when nothing
+  // is detected in that direction.
+  private latestSensor: {
+    front: number | null;
+    right: number | null;
+    simTick: number;
+  } | null = null;
 
   private robotConnectionId: string | null = null;
 
@@ -168,6 +172,35 @@ export class SimEngine {
     log("safe stop: motors stopped");
   }
 
+  // Nearest hit along a given heading among world box edges and obstacles.
+  // Complements the box-edge ray cast: box edges are treated as walls per
+  // specs/SENSORS.md §9.1.
+  private nearestHit(heading: number): number | null {
+    const boxDistance = castFrontRay(this.world.pose, {
+      minX: this.world.minX,
+      maxX: this.world.maxX,
+      minY: this.world.minY,
+      maxY: this.world.maxY,
+    }, heading);
+    const obstacleDistance = this.world.nearestObstacleHit(
+      this.world.pose.x,
+      this.world.pose.y,
+      heading,
+    );
+    // Nearest hit among box edges and obstacles wins.
+    let reading: number | null = null;
+    if (boxDistance !== null && (reading === null || boxDistance < reading)) {
+      reading = boxDistance;
+    }
+    if (
+      obstacleDistance !== null &&
+      (reading === null || obstacleDistance < reading)
+    ) {
+      reading = obstacleDistance;
+    }
+    return reading;
+  }
+
   // ---- Fixed timestep loop ----------------------------------------------
 
   private loop(): void {
@@ -187,37 +220,21 @@ export class SimEngine {
     //    if the robot is slow; sim never waits for a new command).
     this.world.apply(this.latestCommand.left, this.latestCommand.right);
 
-    // 2. Compute the front-proximity sensor reading (iteration 2): cast the
-    //    front ray against the world box edges and any obstacles, take the
-    //    nearest hit, single-slot, overwritten each tick.
-    const boxDistance = castFrontRay(this.world.pose, {
-      minX: this.world.minX,
-      maxX: this.world.maxX,
-      minY: this.world.minY,
-      maxY: this.world.maxY,
-    });
-    const obstacleDistance = this.world.nearestObstacleHit(
-      this.world.pose.x,
-      this.world.pose.y,
-      this.world.pose.heading,
-    );
-    // Nearest hit among box edges and obstacles wins.
-    let reading: number | null = null;
-    if (boxDistance !== null && (reading === null || boxDistance < reading)) {
-      reading = boxDistance;
-    }
-    if (obstacleDistance !== null && (reading === null || obstacleDistance < reading)) {
-      reading = obstacleDistance;
-    }
-    this.latestSensor = { distance: reading, simTick: this.simTick };
+    // 2. Compute the front-proximity sensor readings (iteration 2): cast the
+    //    front ray and a right-facing ray (heading - PI/2) against the world
+    //    box edges and any obstacles, take the nearest hit for each,
+    //    single-slot, overwritten each tick.
+    const front = this.nearestHit(this.world.pose.heading);
+    const right = this.nearestHit(this.world.pose.heading - Math.PI / 2);
+    this.latestSensor = { front, right, simTick: this.simTick };
 
     // 3. Publish sensorSnapshot to the robot channel every tick.
-    //    Single-slot (no queue); payload carries the latest distance.
+    //    Single-slot (no queue); payload carries the latest front/right distances.
     const sensorEnvelope: OutgoingEnvelope = {
       type: "sensorSnapshot",
       seq: 0, // assigned per-connection by the transport on send
       simTick: this.simTick,
-      payload: { distance: this.latestSensor.distance },
+      payload: { front: this.latestSensor.front, right: this.latestSensor.right },
     };
     if (this.robotConnectionId) {
       this.transport.send(this.robotConnectionId, sensorEnvelope);

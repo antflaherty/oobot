@@ -10,23 +10,21 @@ Defines how the simulated world is described: its bounds, obstacles, and robot s
 
 ## Iteration 1 (current)
 
-The world is a **bounded 2D box with no obstacles**. All world parameters are hardcoded in the sim:
+The world is a bounded 2D box described by an optional JSON world file
+(`simulator/server/worlds/maze.json` by default), falling back to hardcoded
+defaults if the file is missing or unparseable:
 
 | Parameter | Value | Source |
 |-----------|-------|--------|
 | Width | 800 world units | `simulator/server/src/world.ts` `DEFAULT_WORLD_CONFIG.width` |
 | Height | 600 world units | `simulator/server/src/world.ts` `DEFAULT_WORLD_CONFIG.height` |
-| Obstacles | none | iteration 1 world is empty |
-| Robot start pose | `(0, 0, heading=0)` | `DEFAULT_START_POSE` |
+| Obstacles | static axis-aligned boxes from the world file (none if absent) | `loadWorldFile()` / `WorldModel.obstacles` |
+| Robot start pose | from world file, else `(0, 0, heading=0)` | `loadWorldFile()` / `DEFAULT_START_POSE` |
 
-The box is centred at the origin: `x ∈ [-400, 400]`, `y ∈ [-300, 300]`. Collision response at the box edges is stop-dead (position clamped).
+The box is centred at the origin: `x ∈ [-400, 400]`, `y ∈ [-300, 300]`. Collision
+response at the box edges is stop-dead (position clamped).
 
-No world file exists and none is needed for iteration 1.
-
-## Iteration 2 (this spec)
-
-A JSON world file describes the bounded box plus a static set of axis-aligned
-box obstacles. Format (obstacles are **centre-based**):
+World file format (obstacles are **centre-based**):
 
 ```json
 {

@@ -12,7 +12,7 @@ This is a technical proof of concept, not a complete learning product. See `MVP.
 |   process        |  (NDJSON)               |  (Node/TS)          |
 |                  |  motorCommand ------->  |  world model,       |
 |  Robot framework |  <------- sensorSnapshot|  60 Hz timestep,    |
-|                  |  (empty, iter 1)        |  actuator state     |
+|                  |  (front + right readings)  |  actuator state     |
 +------------------+                         +----------+----------+
                                                           |
                                                           | visualiser channel
@@ -40,7 +40,9 @@ oobot/
 │   └── src/main/java/oobot/robot/
 │       ├── SquareTraceBehaviour.java  (default example)
 │       ├── CircleTraceBehaviour.java
-│       └── HeartTraceBehaviour.java
+│       ├── HeartTraceBehaviour.java
+│       ├── WallAvoidBehaviour.java
+│       └── WallFollowRightBehaviour.java
 ├── specs/               # WIRE_PROTOCOL.md, COMMS.md, COMPONENTS.md, ROBOT_LAUNCH.md, SENSORS.md, WORLD_FORMAT.md
 ├── ARCHITECTURE.md      # high-level architecture and component boundaries
 ├── MVP.md               # scope, in/out of scope, success criteria
@@ -66,7 +68,7 @@ This launches, in parallel:
 
 - Sim server on `ws://localhost:8080` (robot channel) and `ws://localhost:8081` (visualiser channel)
 - Visualiser dev server (opens `http://localhost:5173` by default)
-- Example robot controller (`java -jar robot.jar --host localhost --port 8080`), running the square-trace behaviour
+- Example robot controller (`java -jar robot.jar --host localhost --port 8080 --behaviour wall-follow-right`), running the wall-follow-right behaviour (use `--behaviour square` for the square trace)
 
 Open the visualiser URL in your browser to see the robot move.
 

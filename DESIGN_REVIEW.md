@@ -164,7 +164,12 @@ No `clientType`/`clientId` needed — the channel implies who is talking. Baseli
 ### 5.1 One distance sensor — enough?
 **Question:** A single forward-facing sensor lets a robot detect "something ahead" but not where it is relative to the robot's sides, not wall-following, not corner detection. Is one sensor enough to demonstrate "respond to a basic obstacle"? It works for a simple "turn when close" behaviour, but anything more interesting needs at least two (left/right) or a scanning sensor.
 
-**Decision:** **accepted with modification** — for the very first iteration, **ignore sensors entirely.** The first robot just moves forward for one tick, turns for one tick, etc., so it traces a square. Sensors (and obstacle avoidance) are kept in mind but deferred to iteration 2. This proves the core control loop (sim → motor command → movement → visualiser) without sensor complexity.
+**Decision:** **accepted with modification** — sensors are now implemented with
+two front-proximity sensors (`front` facing heading, `right` at 90 degrees to
+the right) on `sensorSnapshot`, each reporting the nearest hit among obstacles
+and world box edges. A `wall-avoid` behaviour uses `front`; a
+`wall-follow-right` behaviour uses both. Sensors were deferred for the very
+first iteration to prove the core control loop, but have since been added.
 
 ---
 

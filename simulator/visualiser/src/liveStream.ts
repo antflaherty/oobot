@@ -33,6 +33,7 @@ export class LiveStream {
   private connected = false;
   private reconnectTimer: number | null = null;
   private latestObstacles: Obstacle[] = [];
+  private onTrailPoint: ((x: number, y: number) => void) | null = null;
 
   // Reference point for the continuously advancing render clock.
   // renderTick = baseTick + (now - baseTime) * TICKS_PER_SECOND / 1000
@@ -66,6 +67,13 @@ export class LiveStream {
   /** Returns the latest static obstacle set (empty array if none). */
   getObstacles(): Obstacle[] {
     return this.latestObstacles;
+  }
+
+  /** Register a callback invoked with each new snapshot's robot pose so the
+   * trail can be recorded from the authoritative position stream rather than
+   * from render frames (which pause while the tab is hidden). */
+  setTrailPointCallback(cb: (x: number, y: number) => void): void {
+    this.onTrailPoint = cb;
   }
 
   /** Interpolate the robot pose at the given wall-clock render time. */
@@ -183,6 +191,10 @@ export class LiveStream {
     // Obstacles are static but re-cache on each snapshot in case the world
     // changes (e.g. reload). Default to empty if absent.
     this.latestObstacles = snapshot.payload.obstacles ?? [];
+
+    // Record the trail point from the authoritative snapshot stream so the
+    // path keeps tracing even while requestAnimationFrame is paused (tab hidden).
+    this.onTrailPoint?.(snapshot.payload.robot.x, snapshot.payload.robot.y);
 
     // Rebase the render clock to the newest snapshot.
     this.rebase(buffered);

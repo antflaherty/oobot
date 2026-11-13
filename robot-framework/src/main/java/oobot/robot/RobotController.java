@@ -58,6 +58,9 @@ public class RobotController {
             case "wall-avoid":
                 behaviour = new WallAvoidBehaviour();
                 break;
+            case "wall-follow-right":
+                behaviour = new WallFollowRightBehaviour();
+                break;
             default:
                 System.err.println("[robot-controller] unknown behaviour: " + behaviourName);
                 System.exit(2);

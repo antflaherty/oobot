@@ -41,4 +41,19 @@ public final class Sensors {
         Double d = framework.lastSensorDistance();
         return d == null ? Double.POSITIVE_INFINITY : d;
     }
+
+    /**
+     * Distance in world units to the nearest obstacle/wall to the right of the
+     * robot, along a ray at 90 degrees to its heading.
+     *
+     * @return the distance, or {@code Double.POSITIVE_INFINITY} if nothing is
+     *         detected within range, or if the framework is not connected.
+     */
+    public static double rightDistance() {
+        if (framework == null) {
+            return Double.POSITIVE_INFINITY;
+        }
+        Double d = framework.lastRightDistance();
+        return d == null ? Double.POSITIVE_INFINITY : d;
+    }
 }
