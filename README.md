@@ -36,9 +36,17 @@ oobot/
 ├── simulator/
 │   ├── server/          # Node.js/TypeScript sim + WebSocket server (ports 8080/8081)
 │   └── visualiser/      # vanilla TypeScript + HTML5 canvas browser app (vite)
-├── robot-framework/     # Java framework + example controller (fat JAR, JDK 21)
-├── specs/               # WIRE_PROTOCOL.md, COMMS.md, COMPONENTS.md, ROBOT_LAUNCH.md, WORLD_FORMAT.md
-├── docs/                # ARCHITECTURE.md, MVP.md, DESIGN_REVIEW.md, FUTURE.md, PLAN.md
+├── robot-framework/     # Java framework + example controllers (fat JAR, JDK 21)
+│   └── src/main/java/oobot/robot/
+│       ├── SquareTraceBehaviour.java  (default example)
+│       ├── CircleTraceBehaviour.java
+│       └── HeartTraceBehaviour.java
+├── specs/               # WIRE_PROTOCOL.md, COMMS.md, COMPONENTS.md, ROBOT_LAUNCH.md, SENSORS.md, WORLD_FORMAT.md
+├── ARCHITECTURE.md      # high-level architecture and component boundaries
+├── MVP.md               # scope, in/out of scope, success criteria
+├── DESIGN_REVIEW.md     # resolved open questions and decisions
+├── FUTURE.md            # post-MVP ideas
+├── PLAN.md              # implementation plan of attack
 ├── README.md            # this file
 └── package.json         # root dev scripts (npm run dev)
 ```
@@ -79,8 +87,8 @@ The MVP is successful when:
 1. The simulation can run independently of the browser visualiser.
 2. A separate Java process can connect to the simulation.
 3. Java motor commands cause the simulated robot to move.
-4. The simulation provides sensor readings to the Java controller (empty payload for iteration 1).
-5. The Java controller can use those readings to change the robot's behaviour.
+4. The simulation provides `sensorSnapshot` messages to the Java controller (empty payload in iteration 1 — no readings yet).
+5. The Java controller can exercise the sensor path (`Sensors.latestSimTick()`) on each behaviour update.
 6. The visualiser shows the robot's behaviour without controlling the simulation's timing.
 7. A controller that stops or disconnects cannot leave the robot moving indefinitely.
 
@@ -95,6 +103,7 @@ The MVP is successful when:
 - `specs/COMMS.md` — encapsulated transport interface
 - `specs/COMPONENTS.md` — per-component responsibilities and interfaces
 - `specs/ROBOT_LAUNCH.md` — how the Java controller is started
+- `specs/SENSORS.md` — informal, pre-implementation notes on sensors (not an MVP spec)
 - `specs/WORLD_FORMAT.md` — world model (iteration 1: bounded box, no obstacles)
 
 ## License

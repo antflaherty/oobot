@@ -31,9 +31,9 @@ block while waiting for a robot controller or a visualiser.
 #### World model (MVP iteration 1)
 
 The world is a bounded 2D box with no obstacles. The robot is a point
-or circle that moves within the box. Collision response is "stop dead"
-— movement that would penetrate a boundary is clamped so the robot
-stops at the edge. Obstacles and a world file format are deferred to
+that moves within the box. Collision response is "stop dead" —
+movement that would penetrate a boundary is clamped so the robot stops
+at the edge. Obstacles and a world file format are deferred to
 iteration 2.
 
 #### Timestep and speed control
@@ -62,7 +62,8 @@ a simple behaviour update method. Concurrency and networking details
 remain hidden from example robot code.
 
 The first example behaviour is a square-tracing robot: move forward for
-one tick, turn for one tick, repeat. Sensors are deferred to iteration 2.
+one behaviour state (~1 second at 20 Hz), turn for one behaviour state,
+repeat. Sensors are deferred to iteration 2.
 
 #### Launch and configuration
 
@@ -126,11 +127,13 @@ The MVP uses two WebSocket channels from a single sim server process:
     through which the visualiser receives `worldSnapshot` messages and
     can eventually send `userControl` messages.
 
-Both WebSocket servers bind to `host: "localhost"` (loopback only), so
-connections from off-machine interfaces are refused at the socket level.
-Origin is additionally validated on upgrade: only `localhost` origins (or
-no Origin header, for non-browser clients such as the Java robot
-framework) are accepted.
+Both WebSocket servers bind to `host: "0.0.0.0"` so that IPv4-only
+clients (such as Java's `Socket.connect("localhost")`, which may not
+fall back from `::1`) can connect alongside dual-stack clients. Binding
+to `localhost` on macOS results in IPv6-only listening, which breaks
+IPv4-only clients. Origin is additionally validated on upgrade: only
+`localhost` origins (or no Origin header, for non-browser clients such
+as the Java robot framework) are accepted.
 
 ### Message format
 
@@ -208,22 +211,23 @@ student-facing Java API.
 ## Monorepo outline
 
 ```
-object-oriented-robotics/
+oobot/
 ├── simulator/
-│   ├── server/          # Node.js/TypeScript sim + WebSocket server
-│   └── visualiser/      # vanilla TS + canvas browser app
-├── robot-framework/     # Java framework + example controller
-├── examples/
-│   └── square-trace/    # first example robot behaviour
-├── docs/
-│   ├── ARCHITECTURE.md
-│   ├── MVP.md
-│   └── DESIGN_REVIEW.md
-├── specs/
-│   ├── WIRE_PROTOCOL.md
-│   ├── WORLD_FORMAT.md
-│   └── ROBOT_LAUNCH.md
-└── README.md
+│   ├── server/          # Node.js/TypeScript sim + WebSocket server (ports 8080/8081)
+│   └── visualiser/      # vanilla TypeScript + HTML5 canvas browser app (vite)
+├── robot-framework/     # Java framework + example controllers (fat JAR, JDK 21)
+│   └── src/main/java/oobot/robot/
+│       ├── SquareTraceBehaviour.java  (default example behaviour)
+│       ├── CircleTraceBehaviour.java
+│       └── HeartTraceBehaviour.java
+├── specs/               # WIRE_PROTOCOL.md, COMMS.md, COMPONENTS.md, ROBOT_LAUNCH.md, SENSORS.md, WORLD_FORMAT.md
+├── ARCHITECTURE.md      # high-level architecture and component boundaries (this file)
+├── MVP.md               # scope, in/out of scope, success criteria
+├── DESIGN_REVIEW.md     # resolved open questions and decisions
+├── FUTURE.md            # post-MVP ideas
+├── PLAN.md              # implementation plan of attack
+├── README.md            # this file
+└── package.json         # root dev scripts (npm run dev)
 ```
 
 ## Guiding principles

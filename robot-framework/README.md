@@ -53,6 +53,20 @@ interface RobotBehaviour {
     void update(); // called ~20 Hz
 }
 
+// High-level movement abstraction. Behaviour code commands movement through
+// Mover without knowing about motors, power levels, or differential drive.
+interface Mover {
+    void forward();   // move forward at full speed
+    void turnRight(); // turn right in place
+    void turnLeft();  // turn left in place
+    void stop();      // stop all movement
+}
+
+// The only Mover implementation in iteration 1. Translates high-level
+// commands into per-motor power values ({left, right} in [-1, 1]) and sends
+// them as motorCommand NDJSON messages over the WebSocket.
+class WheeledMover implements Mover { ... }
+
 class Motor {
     static void setSpeed(double speed); // [-1, 1], sends motorCommand
 }
@@ -62,15 +76,18 @@ class Sensors {
 }
 ```
 
-Robot code implements `RobotBehaviour` and calls `Motor.setSpeed(...)`. The
-example behaviour (`SquareTraceBehaviour`) drives the square trace.
+Robot code implements `RobotBehaviour` and commands movement via `Mover`
+(e.g. `forward()`, `turnRight()`). `Mover` implementations translate those
+commands into per-motor `motorCommand` messages; `Motor.setSpeed(...)` is
+available but not used by the iteration-1 example behaviours. The example
+behaviour (`SquareTraceBehaviour`) drives the square trace through `WheeledMover`.
 
 ## Framework behaviour notes (iteration 1)
 
 - `Motor.setSpeed(double)` drives both motors at the same speed
-  (wire payload `{left: speed, right: speed}`). A true in-place turn needs
-  per-motor control, which is deferred beyond iteration 1; the example's TURN
-  state stops for one tick.
+  (wire payload `{left: speed, right: speed}`). Per-motor differential control
+  IS available via `WheeledMover` (`turnRight()` = `{left: 1.0, right: -1.0}`,
+  `turnLeft()` = `{left: -1.0, right: 1.0}`); it is not deferred.
 - `sensorSnapshot` payload is empty in iteration 1; `Sensors.latestSimTick()`
   exposes the last tick for staleness checks later.
 - Reconnects automatically with a fixed delay when the WebSocket closes

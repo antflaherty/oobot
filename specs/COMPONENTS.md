@@ -178,8 +178,9 @@ the sim advances.
 
 ### 2.5 Connection handling
 
-- Connects on load; on disconnect, stop rendering or hold last frame (no
-  retry logic required in MVP; sim removes disconnected clients).
+- Connects on load; on disconnect, holds the last frame and auto-reconnects
+  every ~2 seconds (client-side resilience; the sim does not retry or buffer
+  for disconnected visualisers and removes them from its subscriber list).
 - Malformed NDJSON lines: log and ignore.
 
 ### 2.6 Key interfaces
@@ -196,8 +197,9 @@ the sim advances.
 - Start/pause/reset or any `userControl` (deferred).
 - Obstacle rendering beyond an empty list (iteration 1 world has none).
 - Driving or blocking sim timing; any influence on simulation.
-- Reconnection logic beyond accepting a fresh WebSocket (sim accepts new
-  connections and sends latest snapshot).
+- Sim-side reconnection logic (the sim accepts a fresh WebSocket connection
+  and sends the latest snapshot; the sim itself does not retry or buffer).
+  Client-side auto-reconnect is handled by the visualiser itself.
 
 ---
 
@@ -233,10 +235,25 @@ and safe stop. Robot code never touches sockets directly.
 // Framework entry point — robot program implements this
 interface RobotBehaviour {
     void init();          // called once on start
-    void update();        // called ~20 Hz; read sensors, command motors
+    void update();        // called ~20 Hz; read sensors, command movement
 }
 
-// Motor hardware abstraction
+// High-level movement abstraction — behaviour code commands movement through
+// Mover without knowing about motors, power levels, or differential drive.
+interface Mover {
+    void forward();   // move forward at full speed
+    void turnRight(); // turn right in place
+    void turnLeft();  // turn left in place
+    void stop();      // stop all movement
+}
+
+// The only Mover implementation in iteration 1. Translates high-level commands
+// into per-motor power values ({left, right} in [-1, 1]) and sends them as
+// motorCommand NDJSON messages over the WebSocket.
+class WheeledMover implements Mover { ... }
+
+// Motor hardware abstraction (lower level; available but not used by
+// iteration-1 example behaviours, which go through Mover instead).
 class Motor {
     static void setSpeed(double speed); // speed in [-1, 1], sends motorCommand
 }
@@ -289,7 +306,7 @@ Framework responsibilities:
 
 ---
 
-## 4. Example robot (square-trace) (`examples/square-trace` or within `robot-framework`)
+## 4. Example robot (square-trace) (within `robot-framework`)
 
 ### 4.1 Purpose
 

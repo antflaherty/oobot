@@ -45,7 +45,6 @@ On startup the controller:
 ## Out of scope for MVP
 
 - Config file; environment variables as an alternative to CLI args.
-- Config file; environment variables as an alternative to CLI args.
 - Discovery service (the robot is told the sim's host/port explicitly).
 - Automatic port selection / finding a free port.
 - Multiple robots / per-robot launch configuration.

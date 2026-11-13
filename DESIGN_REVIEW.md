@@ -118,7 +118,7 @@ No `clientType`/`clientId` needed — the channel implies who is talking. Baseli
 ### 3.3 TypeScript in two of three components
 **Question:** TS is used for the sim and visualiser, but the framework is plain Java and no code is shared between components. Is the build complexity of TS worth it for the MVP?
 
-**Decision:** **accepted** — TS for sim and visualiser. The sim is Node-based so TS adds type safety with minimal tooling overhead; the visualiser benefits from TS with React/canvas. No cross-component code sharing needed — TS is just the per-component implementation language.
+**Decision:** **accepted** — TS for sim and visualiser. The sim is Node-based so TS adds type safety with minimal tooling overhead; the visualiser benefits from TS with vanilla canvas. No cross-component code sharing needed — TS is just the per-component implementation language.
 
 ---
 
@@ -141,7 +141,7 @@ No `clientType`/`clientId` needed — the channel implies who is talking. Baseli
 ### 4.1 Why React for a canvas visualiser?
 **Question:** React's reconciliation model is DOM-oriented. Drawing to an imperative `<canvas>` largely bypasses the virtual DOM, so React is essentially a mount point. Would vanilla TypeScript + canvas, or a lighter framework, be less fighting-the-framework?
 
-**Decision:** **accepted with modification** — no React for MVP. Vanilla TypeScript + canvas. Add React later only if UI controls (start/pause/reset) benefit from a component model.
+**Decision:** **accepted** — no React for MVP. Vanilla TypeScript + canvas. Add React later only if UI controls (start/pause/reset) benefit from a component model.
 
 ---
 
@@ -215,7 +215,7 @@ No `clientType`/`clientId` needed — the channel implies who is talking. Baseli
 ### 6.4 Visualiser discovery
 **Question:** How does the browser discover the sim's WebSocket URL? Hardcoded `localhost:PORT`?
 
-**Decision:** **accepted** — hardcoded `ws://localhost:VISUALISER_PORT` for MVP. User opens `http://localhost:PORT` and the visualiser connects to the sim on the same host. No discovery service. The sim server binds both WebSocket sockets to `host: "localhost"` (loopback only), so off-machine connections are refused at the socket level regardless of IP or port.
+**Decision:** **accepted** — hardcoded `ws://localhost:VISUALISER_PORT` for MVP. User opens `http://localhost:PORT` and the visualiser connects to the sim on the same host. No discovery service. The sim server binds both WebSocket sockets to `host: "0.0.0.0"` (all interfaces), because binding to `localhost` on macOS results in IPv6-only listening which breaks IPv4-only clients such as Java's socket client. Origin validation on upgrade (only `localhost` origins, or no Origin header for non-browser clients) provides defense in depth on top of the socket bind.
 
 ---
 
