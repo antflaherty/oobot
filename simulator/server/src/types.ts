@@ -50,7 +50,9 @@ export interface WorldSnapshotPayload {
   robot: { x: number; y: number; heading: number }; // heading: radians, 0 = +X axis
 }
 
-// sensorSnapshot payload is {} for iteration 1
+export interface SensorSnapshotPayload {
+  distance: number | null; // world units to nearest hit ahead, or null if nothing detected
+}
 
 export interface RobotPose {
   x: number;

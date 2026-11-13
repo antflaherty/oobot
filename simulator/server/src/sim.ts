@@ -18,6 +18,7 @@ import {
   OutgoingEnvelope,
 } from "./types";
 import { WorldConfig, WorldModel, DEFAULT_WORLD_CONFIG } from "./world";
+import { castFrontRay } from "./sensor";
 
 const TICK_MS = 1000 / 60; // target ~60 Hz
 const LOG_HZ_INTERVAL_MS = 5000;
@@ -56,6 +57,11 @@ export class SimEngine {
   // the last commanded speed until overridden; the sim never waits for the
   // robot.
   private latestCommand: MotorCommandPayload = { left: 0, right: 0 };
+
+  // Single-slot sensor state: latest front-proximity reading, overwritten
+  // each tick (no queue). distance is null when nothing is detected.
+  private latestSensor: { distance: number | null; simTick: number } | null =
+    null;
 
   private robotConnectionId: string | null = null;
 
@@ -170,13 +176,24 @@ export class SimEngine {
     //    if the robot is slow; sim never waits for a new command).
     this.world.apply(this.latestCommand.left, this.latestCommand.right);
 
-    // 2. Publish sensorSnapshot to the robot channel every tick.
-    //    Iteration 1: empty payload {}, single-slot (no queue).
+    // 2. Compute the front-proximity sensor reading (iteration 2): cast the
+    //    front ray against the world box edges, single-slot, overwritten
+    //    each tick.
+    const reading = castFrontRay(this.world.pose, {
+      minX: this.world.minX,
+      maxX: this.world.maxX,
+      minY: this.world.minY,
+      maxY: this.world.maxY,
+    });
+    this.latestSensor = { distance: reading, simTick: this.simTick };
+
+    // 3. Publish sensorSnapshot to the robot channel every tick.
+    //    Single-slot (no queue); payload carries the latest distance.
     const sensorEnvelope: OutgoingEnvelope = {
       type: "sensorSnapshot",
       seq: 0, // assigned per-connection by the transport on send
       simTick: this.simTick,
-      payload: {},
+      payload: { distance: this.latestSensor.distance },
     };
     if (this.robotConnectionId) {
       this.transport.send(this.robotConnectionId, sensorEnvelope);
