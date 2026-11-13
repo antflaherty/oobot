@@ -15,6 +15,8 @@
 // decisions (specs/COMPONENTS.md §1.4, §1.7 say "fixed at scaffolding"). They
 // are exported constants so they can be changed in one place.
 
+import * as fs from "fs";
+
 export interface WorldConfig {
   width: number;      // world units, X extent of the box
   height: number;     // world units, Y extent of the box
@@ -197,4 +199,89 @@ export function rayVsAxisAlignedBox(
   // entirely behind the ray.
   if (tMax < 0) return null;
   return Math.max(tMin, 0);
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+// The result of loading and parsing a world JSON file.
+export interface LoadedWorld {
+  config: WorldConfig;
+  startPose: RobotPose;
+  obstacles: Obstacle[];
+}
+
+// Load and parse a world JSON file (see specs/WORLD_FORMAT.md iteration 2).
+//
+// Width/height build a WorldConfig that keeps every other field from
+// DEFAULT_WORLD_CONFIG. The robot block becomes the start pose. Obstacles are
+// optional; a missing or empty obstacles list yields an empty world.
+//
+// Throws if the file cannot be read, is not valid JSON, or does not conform to
+// the format — callers (e.g. the server entry point) are expected to catch and
+// fall back to defaults rather than crash.
+export function loadWorldFile(filePath: string): LoadedWorld {
+  const raw = fs.readFileSync(filePath, "utf8");
+  const parsed = JSON.parse(raw);
+
+  if (!isObject(parsed)) {
+    throw new Error(`world file "${filePath}": top-level JSON must be an object`);
+  }
+
+  const { width, height } = parsed as { width: unknown; height: unknown };
+  if (!isFiniteNumber(width) || !isFiniteNumber(height) || width <= 0 || height <= 0) {
+    throw new Error(
+      `world file "${filePath}": width and height must be positive numbers`,
+    );
+  }
+
+  const config: WorldConfig = {
+    ...DEFAULT_WORLD_CONFIG,
+    width,
+    height,
+  };
+
+  const robot = (parsed as { robot: unknown }).robot;
+  if (
+    !isObject(robot) ||
+    !isFiniteNumber(robot.x) ||
+    !isFiniteNumber(robot.y) ||
+    !isFiniteNumber(robot.heading)
+  ) {
+    throw new Error(
+      `world file "${filePath}": robot must be { x, y, heading } numbers`,
+    );
+  }
+  const startPose: RobotPose = { x: robot.x, y: robot.y, heading: robot.heading };
+
+  const obstacles: Obstacle[] = [];
+  const rawObstacles = (parsed as { obstacles: unknown }).obstacles;
+  if (rawObstacles !== undefined && rawObstacles !== null) {
+    if (!Array.isArray(rawObstacles)) {
+      throw new Error(`world file "${filePath}": obstacles must be an array`);
+    }
+    for (const o of rawObstacles) {
+      if (
+        !isObject(o) ||
+        !isFiniteNumber(o.x) ||
+        !isFiniteNumber(o.y) ||
+        !isFiniteNumber(o.width) ||
+        !isFiniteNumber(o.height) ||
+        o.width <= 0 ||
+        o.height <= 0
+      ) {
+        throw new Error(
+          `world file "${filePath}": each obstacle must be { x, y, width, height } positive numbers`,
+        );
+      }
+      obstacles.push({ x: o.x, y: o.y, width: o.width, height: o.height });
+    }
+  }
+
+  return { config, startPose, obstacles };
 }

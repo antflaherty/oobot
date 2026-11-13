@@ -10,13 +10,27 @@
 // Ports default to 8080/8081 and can be overridden via ROBOT_PORT /
 // VISUALISER_PORT environment variables. Localhost only, hardcoded ports,
 // no discovery (DESIGN_REVIEW 6.1 / 6.4).
+//
+// By default the sim loads the maze world from simulator/server/worlds/maze.json.
+// If the file is missing or unparseable a warning is logged and the sim falls
+// back to an empty default world — it never crashes on a bad world file.
 
 import { WebSocketTransport } from "./transport";
 import { SimEngine } from "./sim";
-import { TransportOptions } from "./types";
+import { TransportOptions, RobotPose } from "./types";
+import {
+  loadWorldFile,
+  WorldConfig,
+  Obstacle,
+} from "./world";
+import * as path from "path";
 
 const ROBOT_PORT = Number(process.env.ROBOT_PORT ?? 8080);
 const VISUALISER_PORT = Number(process.env.VISUALISER_PORT ?? 8081);
+
+// Resolved relative to this file's directory so it works regardless of cwd
+// (ts-node runs src/index.ts, so go up one level to the server root).
+const DEFAULT_WORLD_FILE = path.join(__dirname, "..", "worlds", "maze.json");
 
 function log(...args: unknown[]): void {
   const stamp = new Date().toISOString().slice(11, 19);
@@ -27,7 +41,31 @@ async function main(): Promise<void> {
   const options: TransportOptions = { robotPort: ROBOT_PORT, visualiserPort: VISUALISER_PORT };
 
   const transport = new WebSocketTransport();
-  const sim = new SimEngine(transport);
+
+  // Load the default world file; fall back to an empty world on any failure.
+  let worldConfig: WorldConfig | undefined;
+  let startPose: RobotPose = { x: 0, y: 0, heading: 0 };
+  let obstacles: Obstacle[] = [];
+
+  try {
+    const loaded = loadWorldFile(DEFAULT_WORLD_FILE);
+    worldConfig = loaded.config;
+    startPose = loaded.startPose;
+    obstacles = loaded.obstacles;
+    log(
+      `loaded world file: ${DEFAULT_WORLD_FILE} ` +
+        `(box ${loaded.config.width}x${loaded.config.height}, ${obstacles.length} obstacles, ` +
+        `start=(${startPose.x},${startPose.y},heading=${startPose.heading}))`,
+    );
+  } catch (err) {
+    log(
+      `warning: could not load world file "${DEFAULT_WORLD_FILE}": ${
+        err instanceof Error ? err.message : String(err)
+      } — falling back to empty default world`,
+    );
+  }
+
+  const sim = new SimEngine(transport, worldConfig, startPose, obstacles);
 
   process.on("SIGINT", async () => {
     log("SIGINT received — shutting down");

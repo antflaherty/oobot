@@ -9,7 +9,7 @@
 // Wires into the encapsulated Transport interface (specs/COMMS.md §2). The
 // concrete WebSocketTransport is constructed in index.ts.
 
-import { Transport } from "./types";
+import { Transport, RobotPose } from "./types";
 import {
   Channel,
   Handlers,
@@ -17,7 +17,13 @@ import {
   MotorCommandPayload,
   OutgoingEnvelope,
 } from "./types";
-import { WorldConfig, WorldModel, DEFAULT_WORLD_CONFIG } from "./world";
+import {
+  WorldConfig,
+  WorldModel,
+  DEFAULT_WORLD_CONFIG,
+  Obstacle,
+  DEFAULT_START_POSE,
+} from "./world";
 import { castFrontRay } from "./sensor";
 
 const TICK_MS = 1000 / 60; // target ~60 Hz
@@ -72,9 +78,14 @@ export class SimEngine {
   private ticksSinceLog = 0;
   private logStartTime = Date.now();
 
-  constructor(transport: Transport, worldConfig?: WorldConfig) {
+  constructor(
+    transport: Transport,
+    worldConfig?: WorldConfig,
+    startPose: RobotPose = DEFAULT_START_POSE,
+    obstacles: Obstacle[] = [],
+  ) {
     this.transport = transport;
-    this.world = new WorldModel(worldConfig);
+    this.world = new WorldModel(worldConfig, startPose, obstacles);
   }
 
   start(): void {
@@ -111,7 +122,8 @@ export class SimEngine {
     log(
       `simulation starting: box x[${this.world.minX},${this.world.maxX}] ` +
         `y[${this.world.minY},${this.world.maxY}] ` +
-        `pose=(${this.world.pose.x.toFixed(2)},${this.world.pose.y.toFixed(2)},heading=${this.world.pose.heading.toFixed(2)})`
+        `pose=(${this.world.pose.x.toFixed(2)},${this.world.pose.y.toFixed(2)},heading=${this.world.pose.heading.toFixed(2)}) ` +
+        `obstacles=${this.world.obstacles.length}`
     );
     this.loop();
   }
