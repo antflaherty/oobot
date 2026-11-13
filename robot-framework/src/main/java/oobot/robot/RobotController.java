@@ -3,19 +3,22 @@ package oobot.robot;
 /**
  * Entry point for the robot controller process.
  * <p>
- * Usage: {@code java -jar robot.jar --host localhost --port <ROBOT_PORT>}
+ * Usage: {@code java -jar robot.jar --host localhost --port <ROBOT_PORT>
+ * [--behaviour square|wall-avoid]}
  *
  * <p>
- * Defaults: {@code --host localhost --port 8080}. Pass the sim's robot-channel
- * port via {@code --port}.
+ * Defaults: {@code --host localhost --port 8080 --behaviour square}. Pass the
+ * sim's robot-channel port via {@code --port}.
  */
 public class RobotController {
     private static final String DEFAULT_HOST = "localhost";
     private static final int DEFAULT_PORT = 8080;
+    private static final String DEFAULT_BEHAVIOUR = "square";
 
     public static void main(String[] args) {
         String host = DEFAULT_HOST;
         int port = DEFAULT_PORT;
+        String behaviourName = DEFAULT_BEHAVIOUR;
 
         for (int i = 0; i < args.length; i++) {
             switch (args[i]) {
@@ -34,6 +37,11 @@ public class RobotController {
                         }
                     }
                     break;
+                case "--behaviour":
+                    if (i + 1 < args.length) {
+                        behaviourName = args[++i];
+                    }
+                    break;
                 default:
                     System.err.println("[robot-controller] unknown argument: " + args[i]);
                     System.exit(2);
@@ -43,8 +51,17 @@ public class RobotController {
         System.out.println("[robot-controller] starting; connecting to ws://" + host + ":" + port);
 
         RobotBehaviour behaviour = new SquareTraceBehaviour();
-        // RobotBehaviour behaviour = new CircleTraceBehaviour(); // easy swap back to circle
-        // RobotBehaviour behaviour = new HeartTraceBehaviour();
+        switch (behaviourName) {
+            case "square":
+                behaviour = new SquareTraceBehaviour();
+                break;
+            case "wall-avoid":
+                behaviour = new WallAvoidBehaviour();
+                break;
+            default:
+                System.err.println("[robot-controller] unknown behaviour: " + behaviourName);
+                System.exit(2);
+        }
         Framework framework = new Framework(host, port, behaviour);
         WheeledMover.setFramework(framework);
         Sensors.setFramework(framework);
