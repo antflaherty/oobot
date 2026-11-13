@@ -188,14 +188,27 @@ export class SimEngine {
     this.world.apply(this.latestCommand.left, this.latestCommand.right);
 
     // 2. Compute the front-proximity sensor reading (iteration 2): cast the
-    //    front ray against the world box edges, single-slot, overwritten
-    //    each tick.
-    const reading = castFrontRay(this.world.pose, {
+    //    front ray against the world box edges and any obstacles, take the
+    //    nearest hit, single-slot, overwritten each tick.
+    const boxDistance = castFrontRay(this.world.pose, {
       minX: this.world.minX,
       maxX: this.world.maxX,
       minY: this.world.minY,
       maxY: this.world.maxY,
     });
+    const obstacleDistance = this.world.nearestObstacleHit(
+      this.world.pose.x,
+      this.world.pose.y,
+      this.world.pose.heading,
+    );
+    // Nearest hit among box edges and obstacles wins.
+    let reading: number | null = null;
+    if (boxDistance !== null && (reading === null || boxDistance < reading)) {
+      reading = boxDistance;
+    }
+    if (obstacleDistance !== null && (reading === null || obstacleDistance < reading)) {
+      reading = obstacleDistance;
+    }
     this.latestSensor = { distance: reading, simTick: this.simTick };
 
     // 3. Publish sensorSnapshot to the robot channel every tick.
