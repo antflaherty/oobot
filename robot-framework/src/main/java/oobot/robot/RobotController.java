@@ -54,7 +54,7 @@ public class RobotController implements Runnable {
             description = "Sim robot-channel port (default: ${DEFAULT-VALUE})")
     private int port;
 
-    @Option(names = "--behaviour", defaultValue = "brownian",
+    @Option(names = "--behaviour", defaultValue = "wall-follow-right",
             description = "Behaviour: square|wall-avoid|wall-follow-right|circle|heart|brownian (default: ${DEFAULT-VALUE})")
     private String behaviourName;
 

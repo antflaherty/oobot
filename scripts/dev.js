@@ -72,7 +72,7 @@ async function main() {
       '--port',
       '8080',
       '--behaviour',
-      'brownian',
+      'wall-follow-right',
       '--robot',
       robotManifest,
     ],

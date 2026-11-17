@@ -63,7 +63,7 @@ Options (all have defaults):
 |------|---------|-------------|
 | `--host` | `localhost` | Sim server host |
 | `--port` | `8080` | Sim robot-channel port |
-| `--behaviour` | `brownian` | `square`, `wall-avoid`, `wall-follow-right`, `circle`, `heart`, `brownian` |
+| `--behaviour` | `wall-follow-right` | `square`, `wall-avoid`, `wall-follow-right`, `circle`, `heart`, `brownian` |
 | `--robot` | `robots/default.json` | Path to a component manifest; `npm run dev` passes an absolute path |
 | `--help` | — | Show usage |
 | `--version` | — | Show version |

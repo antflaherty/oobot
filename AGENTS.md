@@ -235,7 +235,7 @@ interface Brain {                 // student writes DI/wiring implementation
 
 Example implementations (reference, not student code) live in `oobot.robot.example`
 (`WheeledMover` is the reference Mover; `DefaultBrain` is the reference Brain;
-`SquareTraceBehaviour` is the default example behaviour).
+`WallFollowRightBehaviour` is the default behaviour).
 `WheeledMover` takes the full wheel list (`WheeledMover(List<Wheel>)`) and derives
 left/right roles from each wheel's `angle()`; `RobotController` supplies that
 list via `ComponentRegistry.wheels()`, which returns the bound `Wheel` handles
