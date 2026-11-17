@@ -11,6 +11,22 @@ import type { WorldSnapshot } from './types';
 export const WORLD_WIDTH = 800;
 export const WORLD_HEIGHT = 600;
 
+// Mirrors simulator/server/worlds/maze.json so the no-sim fallback preview
+// shows the same maze as the live sim. Obstacles are centre-based, matching
+// the sim's Obstacle convention.
+export const MAZE_OBSTACLES = [
+  // Wall 1 (y=-160): spans left edge → near right edge, gap on the RIGHT.
+  { x: -60, y: -160, width: 680, height: 20 },
+  // Wall 2 (y=0): spans near left edge → right edge, gap on the LEFT.
+  { x: 60, y: 0, width: 680, height: 20 },
+  // Wall 3 (y=160): spans left edge → near right edge, gap on the RIGHT.
+  { x: -60, y: 160, width: 680, height: 20 },
+  // Slalom sliver in corridor 2, near the left side.
+  { x: -300, y: -80, width: 20, height: 100 },
+  // Central pillar in corridor 2.
+  { x: 0, y: -80, width: 60, height: 60 },
+];
+
 // Keyframe poses the robot passes through. The snapshot stream below is
 // sampled from these keyframes at regular simTick intervals so consecutive
 // snapshots are spaced apart — which makes the visualiser's interpolation
@@ -77,7 +93,7 @@ export const SNAPSHOTS: WorldSnapshot[] = (() => {
       type: 'worldSnapshot',
       seq: seq++,
       simTick: tick,
-      payload: { robot: { x: pose.x, y: pose.y, heading: pose.heading }, obstacles: [] },
+      payload: { robot: { x: pose.x, y: pose.y, heading: pose.heading }, obstacles: MAZE_OBSTACLES },
     });
   }
   return snaps;

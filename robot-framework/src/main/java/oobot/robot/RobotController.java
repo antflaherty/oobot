@@ -20,13 +20,13 @@ import oobot.robot.example.WheeledMover;
  * [--behaviour square|wall-avoid|wall-follow-right|circle|heart]}
  *
  * <p>
- * Defaults: {@code --host localhost --port 8080 --behaviour square}. Pass the
- * sim's robot-channel port via {@code --port}.
+ * Defaults: {@code --host localhost --port 8080 --behaviour wall-follow-right}.
+ * Pass the sim's robot-channel port via {@code --port}.
  */
 public class RobotController {
     private static final String DEFAULT_HOST = "localhost";
     private static final int DEFAULT_PORT = 8080;
-    private static final String DEFAULT_BEHAVIOUR = "square";
+    private static final String DEFAULT_BEHAVIOUR = "wall-follow-right";
 
     public static void main(String[] args) {
         String host = DEFAULT_HOST;
