@@ -1,5 +1,8 @@
 package oobot.robot.core;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -15,6 +18,7 @@ import java.util.concurrent.TimeUnit;
  * kills the loop.
  */
 public class BehaviourLoop {
+    private static final Logger log = LoggerFactory.getLogger(BehaviourLoop.class);
     private static final long PERIOD_MS = 50; // ~20 Hz
 
     private final Runnable tick;
@@ -40,7 +44,7 @@ public class BehaviourLoop {
                 tick.run();
             } catch (Throwable t) {
                 // never let a behaviour exception kill the loop
-                System.err.println("[behaviour-loop] behaviour threw: " + t);
+                log.error("Behaviour threw an exception", t);
             }
         }, 0, PERIOD_MS, TimeUnit.MILLISECONDS);
     }

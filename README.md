@@ -60,8 +60,9 @@ oobot/
 From the repo root:
 
 ```bash
-npm install        # install root dev dependency (concurrently) — once
-npm run dev        # starts sim server + visualiser dev server + example robot
+npm install         # install sub-package dependencies — once
+npm run build:robot # build robot.jar via Gradle (first run downloads Gradle) — once
+npm run dev         # starts sim server + visualiser dev server + example robot
 ```
 
 This launches, in parallel:

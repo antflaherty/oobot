@@ -20,7 +20,7 @@ sim computes → `sensorSnapshot` payload → Java `Sensors.distance()` → beha
   wall-clock.
 - Sim never blocks on the robot or visualiser; sends are non-blocking.
 - One robot only; no `robotId`.
-- Zero external Java deps (plain `javac`/`jar`); TypeScript `strict: true`.
+- Java built with Gradle + external libs (Jackson/OkHttp/SLF4J/picocli); TypeScript `strict: true`.
 - Sensor visualisation is out of scope (canvas draws `worldSnapshot` only).
 
 ---

@@ -4,12 +4,16 @@ import oobot.robot.student.Brain;
 import oobot.robot.student.Sensors;
 import oobot.robot.student.Wheel;
 import oobot.robot.core.BehaviourLoop;
-import oobot.robot.transport.Envelope;
 import oobot.robot.transport.Json;
+import oobot.robot.transport.WireMessage;
+import oobot.robot.transport.SensorSnapshotMessage;
+import oobot.robot.transport.SensorPayload;
 import oobot.robot.transport.WsConnection;
 import oobot.robot.transport.WsListener;
 
-import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -37,6 +41,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * change.
  */
 public class SimRobot {
+    private static final Logger log = LoggerFactory.getLogger(SimRobot.class);
     private static final long RECONNECT_DELAY_MS = 2000;
 
     private final String host;
@@ -138,9 +143,9 @@ public class SimRobot {
         WsConnection c = connection;
         if (c != null) {
             c.sendText(line);
-            System.out.println("[sim-robot] sent motorCommand " + line);
+            log.debug("Sent motorCommand {}", line.trim());
         } else {
-            System.out.println("[sim-robot] not connected; dropping motorCommand " + line);
+            log.debug("Not connected; dropping motorCommand {}", line.trim());
         }
     }
 
@@ -175,7 +180,7 @@ public class SimRobot {
                 break;
             }
             // WebSocket closed: safe stop, then reconnect.
-            System.out.println("[sim-robot] WebSocket closed; safe-stopping motors");
+            log.info("WebSocket closed; safe-stopping motors");
             safeStop();
             sleep(RECONNECT_DELAY_MS);
         }
@@ -186,7 +191,7 @@ public class SimRobot {
             WsConnection c = new WsConnection(host, port, new WsListener() {
                 @Override
                 public void onOpen() {
-                    System.out.println("[sim-robot] WebSocket connected to ws://" + host + ":" + port);
+                    log.info("WebSocket connected to ws://{}:{}", host, port);
                     synchronized (connectionLock) {
                         seq.set(0); // per-connection sequence restarts
                     }
@@ -199,13 +204,13 @@ public class SimRobot {
 
                 @Override
                 public void onClose() {
-                    System.out.println("[sim-robot] WebSocket closed by peer");
+                    log.info("WebSocket closed by peer");
                     onWebSocketClose();
                 }
 
                 @Override
                 public void onError(Throwable t) {
-                    System.err.println("[sim-robot] WebSocket error: " + t);
+                    log.warn("WebSocket error: {}", t.getMessage());
                 }
             });
             c.connect(); // blocking handshake
@@ -214,7 +219,7 @@ public class SimRobot {
             }
             return true;
         } catch (Throwable t) {
-            System.err.println("[sim-robot] connect failed: " + t);
+            log.warn("Connect failed: {}", t.getMessage());
             return false;
         }
     }
@@ -250,27 +255,13 @@ public class SimRobot {
     }
 
     private void handleIncoming(String line) {
-        Envelope env = Json.parseEnvelope(line);
-        if (env == null) {
+        WireMessage msg = Json.parseMessage(line);
+        if (msg == null) {
             return; // malformed JSON: log and ignore
         }
-        if ("sensorSnapshot".equals(env.type)) {
-            Double front = null;
-            Double right = null;
-            Object payload = env.payload;
-            if (payload instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> p = (Map<String, Object>) payload;
-                Object f = p.get("front");
-                Object r = p.get("right");
-                if (f instanceof Number) {
-                    front = ((Number) f).doubleValue();
-                }
-                if (r instanceof Number) {
-                    right = ((Number) r).doubleValue();
-                }
-            }
-            onSensorSnapshot(env.simTick, front, right);
+        if (msg instanceof SensorSnapshotMessage snapshot) {
+            SensorPayload p = snapshot.payload();
+            onSensorSnapshot(snapshot.simTick(), p.front(), p.right());
         }
     }
 

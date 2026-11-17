@@ -1,5 +1,8 @@
 package oobot.robot.example;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
 import oobot.robot.student.Sensors;
@@ -22,6 +25,8 @@ import oobot.robot.student.Sensors;
  * to exercise the sensor path.
  */
 public class CircleTraceBehaviour implements RobotBehaviour {
+    private static final Logger log = LoggerFactory.getLogger(CircleTraceBehaviour.class);
+
     private enum State { FORWARD, TURN_RIGHT }
     private State state = State.FORWARD;
     private int ticksInState = 0;
@@ -39,7 +44,7 @@ public class CircleTraceBehaviour implements RobotBehaviour {
     @Override
     public void init() {
         mover.stop();
-        System.out.println("[circle-trace] init (stopped)");
+        log.info("init (stopped)");
     }
 
     @Override
@@ -65,6 +70,6 @@ public class CircleTraceBehaviour implements RobotBehaviour {
             ticksInState = 0;
         }
 
-        System.out.println("[circle-trace] state=" + state + " ignoredSensorTick=" + ignoredTick);
+        log.debug("state={} ignoredSensorTick={}", state, ignoredTick);
     }
 }

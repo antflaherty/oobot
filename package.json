@@ -7,7 +7,8 @@
     "dev": "node scripts/dev.js",
     "dev:server": "cd simulator/server && npm run dev",
     "dev:visualiser": "cd simulator/visualiser && npm run dev",
-    "dev:robot": "java -jar robot-framework/robot.jar --host localhost --port 8080 --behaviour wall-avoid"
+    "dev:robot": "java -jar robot-framework/robot.jar --host localhost --port 8080 --behaviour brownian",
+    "build:robot": "cd robot-framework && ./gradlew fatJar"
   },
   "engines": {
     "node": ">=20",

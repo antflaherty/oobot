@@ -1,5 +1,8 @@
 package oobot.robot.example;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
 import oobot.robot.student.Sensors;
@@ -53,6 +56,8 @@ import oobot.robot.student.Sensors;
  * per-wheel translation. This is the decoupling boundary in action.
  */
 public class WallFollowRightBehaviour implements RobotBehaviour {
+    private static final Logger log = LoggerFactory.getLogger(WallFollowRightBehaviour.class);
+
     /** World units: don't drive into something this close or closer ahead. */
     private static final double FRONT_STOP = 50.0;
     /** Forward ticks over which rightDistance is sampled to detect drift. */
@@ -105,7 +110,7 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
         windowStartRight = 0.0;
         prevRight = 0.0;
         turnEndTicks = 0;
-        System.out.println("[wall-follow-right] init (stopped)");
+        log.info("init (stopped)");
     }
 
     @Override

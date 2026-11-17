@@ -1,5 +1,8 @@
 package oobot.robot.example;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
 import oobot.robot.student.Sensors;
@@ -25,6 +28,8 @@ import oobot.robot.student.Sensors;
  * to exercise the sensor path.
  */
 public class HeartTraceBehaviour implements RobotBehaviour {
+    private static final Logger log = LoggerFactory.getLogger(HeartTraceBehaviour.class);
+
     private enum State { TURN, FORWARD }
 
     private static final int SAMPLES = 32;             // points around the heart
@@ -98,7 +103,7 @@ public class HeartTraceBehaviour implements RobotBehaviour {
     @Override
     public void init() {
         mover.stop();
-        System.out.println("[heart-trace] init (stopped)");
+        log.info("init (stopped)");
     }
 
     @Override
@@ -134,7 +139,6 @@ public class HeartTraceBehaviour implements RobotBehaviour {
                 break;
         }
 
-        System.out.println("[heart-trace] seg=" + segIdx + " state=" + state
-                           + " ticksLeft=" + ticksLeft + " ignoredSensorTick=" + ignoredTick);
+        log.debug("seg={} state={} ticksLeft={} ignoredSensorTick={}", segIdx, state, ticksLeft, ignoredTick);
     }
 }

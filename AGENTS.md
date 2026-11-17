@@ -43,7 +43,13 @@ oobot/
 │       ├── package.json      # vite, typescript
 │       └── tsconfig.json
 ├── robot-framework/          # Java framework + example controller (fat JAR)
-│   ├── robot.jar             # prebuilt (gitignored but committed here for dev)
+│   ├── build.gradle.kts      # Gradle Kotlin DSL build (fat JAR task: fatJar)
+│   ├── settings.gradle.kts
+│   ├── gradle/libs.versions.toml  # centralised dependency versions
+│   ├── gradlew / gradlew.bat # Gradle wrapper (downloads Gradle 8.10.2)
+│   ├── MODERNISATION.md      # build/library upgrade progress tracker
+│   ├── robot.jar             # prebuilt fat JAR (gitignored but committed here for dev)
+│   ├── src/main/resources/logback.xml  # logging config
 │   ├── src/main/java/oobot/robot/
 │   │   ├── RobotController.java  # main entry point (wires student + framework)
 │   │   ├── student/              # ← STUDENT CODE AREA (DI happens here)
@@ -67,9 +73,12 @@ oobot/
 │   │   │   ├── SimSensors.java
 │   │   │   └── SimWheel.java
 │   │   └── transport/             # transport (not student)
-│   │       ├── WsConnection.java
-│   │       ├── Json.java / Envelope.java / WsListener.java
-│   │   └── build/                 # javac output (gitignored)
+│   │       ├── WsConnection.java    # OkHttp WebSocket client
+│   │       ├── Json.java            # Jackson serialisation
+│   │       ├── WireMessage.java     # sealed interface (polymorphic envelope)
+│   │       ├── MotorCommandMessage.java / SensorSnapshotMessage.java
+│   │       ├── MotorPayload.java / SensorPayload.java
+│   │       └── WsListener.java
 │   └── README.md
 ├── specs/                    # wire contract & component specs (read-only reference)
 │   ├── WIRE_PROTOCOL.md      # NDJSON envelope, ports, message types
@@ -87,6 +96,7 @@ From repo root (requires Node.js ≥ 20, npm ≥ 10, JDK 21+):
 
 ```bash
 npm install        # once (installs sub-package deps; root has no deps of its own)
+npm run build:robot # once (builds robot.jar via Gradle — wrapper downloads Gradle on first run)
 npm run dev        # starts sim server, visualiser dev server, example robot
 ```
 
@@ -106,7 +116,8 @@ visualiser, then the Java robot. Opens `http://localhost:5173` for the visualise
 - Sim server: `cd simulator/server && npm run build` (tsc → `dist/`)
 - Typecheck sim: `cd simulator/server && npm run typecheck`
 - Visualiser: `cd simulator/visualiser && npm run build` (vite build + tsc --noEmit)
-- Robot JAR: `cd robot-framework && mkdir -p build/classes && javac -d build/classes $(find src/main/java -name '*.java') && jar cfe robot.jar oobot.robot.RobotController -C build/classes .`
+- Robot JAR: `npm run build:robot` (runs `./gradlew fatJar` in `robot-framework/` → `robot.jar`)
+  or `cd robot-framework && ./gradlew fatJar` directly
 
 ## Wire protocol (the contract everything agrees on)
 
@@ -173,7 +184,9 @@ Rebuild the JAR.
 ## Coding conventions & constraints
 
 - TypeScript: `strict: true` in both `tsconfig.json`s. No ESLint/Prettier config present — match existing file style.
-- Java: plain `javac`/`jar`, **no Maven or Gradle**, zero external dependencies. JDK 21+.
+- Java: Gradle (Kotlin DSL) with pinned dependency versions in `gradle/libs.versions.toml`.
+  Libraries: Jackson (JSON), OkHttp (WebSocket), SLF4J + Logback (logging), picocli (CLI).
+  JDK 21+. Fat JAR built with `./gradlew fatJar`.
 - Simulation owns world state; robot code only commands hardware via the framework.
 - Rendering never drives or blocks simulation timing. Sim runs on its own fixed ~60 Hz timestep.
 - Keep the MVP small. Defer: obstacles with complex shapes, heartbeat, multiple robots, tests.
@@ -192,8 +205,8 @@ component boundaries change; code is source of truth otherwise.
 | Change sim world/timestep/collision | `simulator/server/src/sim.ts`, `world.ts` |
 | Add a sim→visualiser message type | `simulator/server/src/transport.ts`, `types.ts` + `specs/WIRE_PROTOCOL.md` |
 | Change robot→sim command handling | `simulator/server/src/transport.ts` |
-| Add a robot behaviour | New `*.java` implementing `RobotBehaviour` in `robot-framework/src/main/java/oobot/robot/api/` (or `example/`) |
-| Change the Java hardware API | `oobot/robot/api/{RobotBehaviour,Mover,Sensors,Wheel,Brain}.java` |
+| Add a robot behaviour | New `*.java` implementing `RobotBehaviour` in `robot-framework/src/main/java/oobot/robot/student/` (or `example/`), register in `RobotController.createBehaviour` + `VALID_BEHAVIOURS`, then `npm run build:robot` |
+| Change the Java hardware API | `oobot/robot/student/{RobotBehaviour,Mover,Sensors,Wheel,Brain}.java` |
 | Change visualiser rendering | `simulator/visualiser/src/renderer.ts`, `main.ts` |
 | Change visualiser WS client | `simulator/visualiser/src/liveStream.ts` |
 | One-command dev startup | `scripts/dev.js` + root `package.json` |
@@ -201,6 +214,6 @@ component boundaries change; code is source of truth otherwise.
 ## What to avoid
 
 - Don't let rendering block or drive the sim tick.
-- Don't add Maven/Gradle to robot-framework (keep zero-dependency `javac`/`jar`).
+- Don't reintroduce hand-rolled JSON/WebSocket code — use Jackson/OkHttp (see `robot-framework/MODERNISATION.md`).
 - Don't make robot code depend on the sim's implementation language — the framework boundary is intentional.
 - Don't commit `node_modules/`, `dist/`, `build/`, `*.jar`, `.idea/`, `.vscode/` (covered by `.gitignore`).

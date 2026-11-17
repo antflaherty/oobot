@@ -1,5 +1,8 @@
 package oobot.robot.example;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
 import oobot.robot.student.Sensors;
@@ -24,6 +27,8 @@ import oobot.robot.student.Sensors;
  * per-wheel translation. This is the decoupling boundary in action.
  */
 public class WallAvoidBehaviour implements RobotBehaviour {
+    private static final Logger log = LoggerFactory.getLogger(WallAvoidBehaviour.class);
+
     /** World units: react when something is this close or closer ahead. */
     private static final double THRESHOLD = 50.0;
 
@@ -38,7 +43,7 @@ public class WallAvoidBehaviour implements RobotBehaviour {
     @Override
     public void init() {
         mover.stop();
-        System.out.println("[wall-avoid] init (stopped); threshold=" + THRESHOLD);
+        log.info("init (stopped); threshold={}", THRESHOLD);
     }
 
     @Override
@@ -49,12 +54,11 @@ public class WallAvoidBehaviour implements RobotBehaviour {
             // Something ahead (wall/obstacle): stop, then turn right to avoid it.
             mover.stop();
             mover.turnRight();
-            System.out.println("[wall-avoid] distance=" + distance + " < threshold=" + THRESHOLD
-                + " -> stop + turnRight");
+            log.debug("distance={} < threshold={} -> stop + turnRight", distance, THRESHOLD);
         } else {
             // Nothing close ahead: keep driving forward.
             mover.forward();
-            System.out.println("[wall-avoid] distance=" + distance + " -> forward");
+            log.debug("distance={} -> forward", distance);
         }
     }
 }

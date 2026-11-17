@@ -1,5 +1,8 @@
 package oobot.robot.example;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
 import oobot.robot.student.Sensors;
@@ -19,6 +22,8 @@ import oobot.robot.student.Sensors;
  * boundary in action.
  */
 public class SquareTraceBehaviour implements RobotBehaviour {
+    private static final Logger log = LoggerFactory.getLogger(SquareTraceBehaviour.class);
+
     private enum State { FORWARD, TURN_RIGHT }
     private State state = State.FORWARD;
     private int ticksInState = 0;
@@ -35,7 +40,7 @@ public class SquareTraceBehaviour implements RobotBehaviour {
     @Override
     public void init() {
         mover.stop();
-        System.out.println("[square-trace] init (stopped)");
+        log.info("init (stopped)");
     }
 
     @Override
@@ -58,6 +63,6 @@ public class SquareTraceBehaviour implements RobotBehaviour {
             ticksInState = 0;
         }
 
-        System.out.println("[square-trace] state=" + state + " ignoredSensorTick=" + ignoredTick);
+        log.debug("state={} ignoredSensorTick={}", state, ignoredTick);
     }
 }
