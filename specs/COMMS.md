@@ -2,91 +2,68 @@
 
 Object Oriented Robotics — MVP
 
-**Status:** accepted (see `DESIGN_REVIEW.md` items 1.1, 2.1, 4.2, 6.5)
+**Status:** current. Describes the implemented sim-side `Transport` abstraction
+and its `WebSocketTransport` implementation (`simulator/server/src/types.ts`,
+`transport.ts`). Connection limits and sequencing follow `WIRE_PROTOCOL.md` and
+`docs/DECISIONS.md` D-2/D-4.
 
 ## 1. Purpose
 
-This document defines the **encapsulated transport interface** in the sim
-server so the transport can be swapped later (e.g. for physical hardware)
-without touching robot code or the wire protocol.
+This document defines the encapsulated transport interface in the **sim
+server** so the transport can be swapped later (e.g. for physical hardware)
+without changing the sim engine. The Java robot has a separate, conventional
+client stack (`WsConnection` with OkHttp + Jackson) and does not implement this
+TypeScript interface.
 
 The communication layer sits between:
 
-- the **simulation engine** (owner of world state, timestep, publishing), and
-- the **concrete transport** (WebSocket server in the MVP; physical hardware
-  transport deferred).
+- the **simulation engine** (owner of world state, timestep, actuator state and
+  publishing), and
+- the **concrete transport** (`WebSocketTransport` in the MVP).
 
-Robot code never touches sockets directly. The Java framework API talks to
-the sim through this encapsulated interface, and the wire protocol envelope
-(`{ type, seq, simTick, payload }`, NDJSON framing — see `specs/WIRE_PROTOCOL.md`)
-is unchanged regardless of which transport implementation is active.
+Robot code never touches sockets directly. The wire envelope
+(`{ type, seq, simTick, payload }`, NDJSON framing — see
+`specs/WIRE_PROTOCOL.md`) is unchanged regardless of the transport.
 
 ## 2. Transport interface (sim side)
 
 ### 2.1 Interface contract
 
-The sim depends only on this abstraction. Everything transport-specific
-(WebSocket frames, TCP buffering, serial ports, motor driver protocols)
-lives behind it.
+`sim.ts` depends only on this abstraction. The authoritative definition is
+`simulator/server/src/types.ts`; the shape is:
 
 ```typescript
-// --- Types shared across transports ---------------------------------------
-
-// Opaque identifier for one transport connection.
+type Channel = "robot" | "visualiser";
 type ConnectionId = string;
 
-// One complete message received from the client side.
 interface IncomingEnvelope {
-  type: string;        // e.g. "motorCommand", "userControl"
+  type: string;        // e.g. "componentCommand"
   seq: number;         // per-connection sender sequence
-  simTick?: number;    // sim logical tick the message relates to
+  simTick?: number;    // sim tick the message relates to (validated by the sim)
   payload: unknown;    // message-specific data
 }
 
-// One complete message to send to the client side.
 interface OutgoingEnvelope {
-  type: string;        // e.g. "sensorSnapshot", "worldSnapshot"
-  seq: number;
+  type: string;        // e.g. "componentSnapshot", "worldSnapshot"
+  seq: number;         // filled in by the transport, per connection
   simTick: number;
   payload: unknown;
 }
 
-// Callback the sim registers to be notified when a client connects.
-type OnConnect = (connectionId: ConnectionId, channel: Channel) => void;
-
-// Callback the sim registers to be notified when a parsed message arrives.
-type OnMessage = (connectionId: ConnectionId, envelope: IncomingEnvelope) => void;
-
-// Callback the sim registers to be notified when a client disconnects.
-type OnDisconnect = (connectionId: ConnectionId, channel: Channel) => void;
-
-type Channel = "robot" | "visualiser";
-
-// --- The interface the sim programs against --------------------------------
+interface Handlers {
+  onConnect: (connectionId: ConnectionId, channel: Channel) => void;
+  onMessage: (connectionId: ConnectionId, channel: Channel,
+              envelope: IncomingEnvelope) => void;
+  onDisconnect: (connectionId: ConnectionId, channel: Channel) => void;
+}
 
 interface Transport {
-  // Start listening on the configured port(s). Called once at sim startup.
-  listen(options: TransportOptions): Promise<void>;
-
-  // Register lifecycle callbacks. The sim wires these up before listen().
-  setHandlers(handlers: {
-    onConnect: OnConnect;
-    onMessage: OnMessage;
-    onDisconnect: OnDisconnect;
-  }): void;
-
-  // Send one envelope to one specific connection. Non-blocking; fire and
-  // forget — the transport owns framing, buffering, and backpressure.
+  listen(options: TransportOptions): Promise<void>;  // resolves once bound
+  setHandlers(handlers: Handlers): void;
   send(connectionId: ConnectionId, envelope: OutgoingEnvelope): void;
-
-  // Send one envelope to every subscriber on a channel (visualiser fan-out).
   broadcast(channel: "visualiser", envelope: OutgoingEnvelope): void;
-
-  // Close one connection and clean up its state.
   close(connectionId: ConnectionId): void;
-
-  // Shut the transport down (stop accepting, close all connections).
-  shutdown(): Promise<void>;
+  shutdown(): Promise<void>;                         // bounded
 }
 
 interface TransportOptions {
@@ -95,314 +72,280 @@ interface TransportOptions {
 }
 ```
 
+`onMessage` receives the **channel** as well as the connection id: commands are
+accepted only when the channel is `"robot"` and the connection is the active
+robot slot (§5.1).
+
 ### 2.2 Implementations
 
 | Implementation | Status | Channel(s) | Notes |
 |----------------|--------|------------|-------|
-| `WebSocketTransport` | MVP | Robot + visualiser | Single Node.js `ws`/`net` server process, two ports |
-| `PhysicalHardwareTransport` | Deferred | Robot (physical) | Same interface; serial/CAN/motor-driver behind it |
+| `WebSocketTransport` | Implemented | Robot + visualiser | One Node.js process, two ports |
+| `PhysicalHardwareTransport` | Deferred idea | Robot (physical) | Would implement the same interface |
 
-The sim constructs exactly one `Transport` and never imports a concrete
-socket library. Swapping transports means constructing a different
-implementation behind the same `Transport` interface — robot code and the
-wire protocol are untouched.
+`index.ts` constructs exactly one `Transport` (currently
+`WebSocketTransport`) and passes it to `SimEngine`; `sim.ts` imports only the
+interface. Swapping transports would require changing that construction, not
+the sim engine or robot code.
 
-### 2.3 What the sim owns vs. what the transport owns
+### 2.3 Ownership
 
 | Concern | Owner |
 |---------|-------|
-| Wire protocol envelope (`{ type, seq, simTick, payload }`) | Sim + wire protocol spec |
-| NDJSON framing (buffer until `\n`, parse one JSON object) | Transport |
-| Accepting connections, assigning connection IDs | Transport |
-| Routing by channel (port) | Transport |
-| Publishing `worldSnapshot` to visualiser subscribers | Sim (calls `transport.broadcast`) |
-| Storing latest `motorCommand` as persistent actuator state | Sim |
-| Safe-stop motors on robot disconnect | Sim (reacts to `onDisconnect` on robot channel) |
-| Drop-oldest backpressure per visualiser | Transport (see section 4) |
-| Never blocking the sim tick on I/O | Both — transport send/broadcast are non-blocking |
+| Wire envelope and message schemas | Sim + `WIRE_PROTOCOL.md` |
+| NDJSON framing, 64 KiB inbound line cap | Transport |
+| Accepting connections, assigning ids, routing by channel | Transport |
+| Bind/origin checks, per-connection outbound `seq`, drop-oldest queue | Transport |
+| Bounded shutdown (close all sockets, cap `server.close()` wait) | Transport |
+| Persistent actuator state, active-robot slot, D-4 seq/tick checks | Sim |
+| Safe-stop on active-robot close / sim shutdown (D-2 layer A) | Sim |
+| Explicit zero command written before Java socket close (D-2 layer B) | Java bridge (`SimRobot` / `WsConnection`) |
+| Publishing `worldSnapshot` to visualisers | Sim (calls `transport.broadcast`) |
+| Never blocking the sim tick on I/O | Both — all send paths are non-blocking |
 
 ## 3. WebSocket server setup (sim server)
 
-A single Node.js server process hosts both WebSocket channels:
+A single Node.js process hosts both channels:
 
-- Robot channel: `ws://localhost:ROBOT_PORT`
-- Visualiser channel: `ws://localhost:VISUALISER_PORT`
+- robot channel: `ws://localhost:ROBOT_PORT` (default 8080);
+- visualiser channel: `ws://localhost:VISUALISER_PORT` (default 8081);
+- both ports validated as integers in 1–65535 (`ROBOT_PORT` /
+  `VISUALISER_PORT`).
 
-The port implies who is talking — there is no `clientType` field in
-messages (see `DESIGN_REVIEW.md` 1.1 / WIRE_PROTOCOL section 2).
+Both servers bind **`0.0.0.0`**, not hostname `localhost`: IPv4-only clients
+(the Java socket) cannot reliably connect to an IPv6-only `localhost` bind on
+macOS. This is not "localhost-only at the socket layer". Instead, each upgrade
+is checked for an allowed `Origin`: no header is allowed (Java), and an
+http(s) URL whose host is `localhost`, `127.0.0.1`, `::1` or `[::1]` is
+allowed; `Origin: null`, other schemes and other hosts are closed with code
+1008. This is browser-oriented defence in depth, not a network firewall.
 
-### 3.1 Server pseudocode
+`listen()` creates both servers, registers `connection`/`error` handlers, then
+awaits both `listening` events. A bind failure (e.g. `EADDRINUSE`) rejects with
+the original error, any bound sibling server is closed, and the entry point
+exits non-zero immediately. There is no silent half-bound state.
+
+Per-connection outgoing state:
+
+- `seq` starts at 0 for each connection and is assigned on send, so two
+  visualiser tabs receive independent monotonic sequences. The caller's
+  envelope (including its payload) is cloned and never mutated.
+- At most one unpublished snapshot is pending. A newer envelope replaces it
+  (drop-oldest). `ws.send` callbacks drive the queue; the sim tick never waits.
+- A failed send logs and closes that client; other clients are unaffected.
+
+### 3.1 Outline (illustrative, not a second implementation)
 
 ```typescript
-class WebSocketTransport implements Transport {
-  private robotServer: WebSocketServer;    // listens on ROBOT_PORT
-  private visualiserServer: WebSocketServer; // listens on VISUALISER_PORT
-  private connections = new Map<ConnectionId, TransportConnection>();
-  private handlers?: { onConnect, onMessage, onDisconnect };
-
-  async listen({ robotPort, visualiserPort }: TransportOptions) {
-    this.robotServer = createWebSocketServer(robotPort);
-    this.visualiserServer = createWebSocketServer(visualiserPort);
-
-    this.robotServer.on("connection", (ws) =>
-      this.accept(ws, "robot")
-    );
-    this.visualiserServer.on("connection", (ws) =>
-      this.accept(ws, "visualiser")
-    );
-  }
-
-  private accept(ws: WebSocket, channel: Channel) {
-    const connectionId = generateId();
-    const conn = new TransportConnection(ws, connectionId, channel);
-    this.connections.set(connectionId, conn);
-
-    // NDJSON framing: buffer bytes until newline, then parse one object.
-    conn.on("line", (line: string) => {
-      let envelope: IncomingEnvelope;
-      try {
-        envelope = JSON.parse(line) as IncomingEnvelope;
-      } catch (err) {
-        // Malformed JSON: log and ignore. Never crash or disconnect.
-        log.warn(`Malformed JSON from ${connectionId}: ${line}`);
-        return;
-      }
-      this.handlers?.onMessage(connectionId, envelope);
-    });
-
-    conn.on("close", () => {
-      this.connections.delete(connectionId);
-      this.handlers?.onDisconnect(connectionId, channel);
-    });
-
-    this.handlers?.onConnect(connectionId, channel);
-  }
-
-  send(connectionId: ConnectionId, envelope: OutgoingEnvelope) {
-    const conn = this.connections.get(connectionId);
-    if (!conn) return; // already gone
-    conn.send(JSON.stringify(envelope) + "\n"); // non-blocking
-  }
-
-  broadcast(channel: "visualiser", envelope: OutgoingEnvelope) {
-    const line = JSON.stringify(envelope) + "\n";
-    for (const conn of this.connections.values()) {
-      if (conn.channel === channel) conn.send(line); // non-blocking, drop-oldest handled per-conn
-    }
-  }
-
-  close(connectionId: ConnectionId) {
-    this.connections.get(connectionId)?.ws.close();
-  }
-
-  async shutdown() {
-    for (const conn of this.connections.values()) conn.ws.close();
-    this.robotServer.close();
-    this.visualiserServer.close();
-  }
+async listen({ robotPort, visualiserPort }) {
+  robotServer = new WebSocketServer({ host: "0.0.0.0", port: robotPort });
+  visualiserServer = new WebSocketServer({ host: "0.0.0.0", port: visualiserPort });
+  // connection handlers check Origin, then accept(ws, channel)
+  // error handlers log post-startup errors
+  await Promise.all([waitForListening(robotServer), waitForListening(visualiserServer)]);
+  // on rejection: close any bound sibling, rethrow original error
 }
 ```
 
-`TransportConnection` owns one raw WebSocket, an incoming NDJSON buffer
-(partial reads buffered until `\n`), and an outgoing send path.
+`TransportConnection` owns the inbound text buffer, the depth-1 outgoing slot
+and the per-connection outgoing counter; see `transport.ts` for the exact code.
+
+### 3.2 Shutdown
+
+`shutdown()` terminates all tracked connections plus any sockets still in
+`server.clients` (including rejected-origin sockets), clears the connection map
+and closes both servers. Each `server.close()` callback races a 2 s timer so an
+unresponsive peer cannot stall process exit. The sim calls `stopMotors()` before
+shutdown; Java writes its zero-before-close frame independently (D-2; see
+`WIRE_PROTOCOL.md` §7 and §9.2 below).
 
 ## 4. Connection lifecycle
 
 ### 4.1 Accept
 
-When a new client connects:
-
-1. The transport accepts the WebSocket upgrade on the appropriate port.
-2. Assign a unique `connectionId`.
-3. Add the connection to the subscriber list (visualiser channel) or to the
-   robot-handler map (robot channel).
-4. Invoke `onConnect(connectionId, channel)`.
-5. Log the connection (channel + connection ID).
+1. The TCP/WebSocket upgrade is accepted on the appropriate port; `Origin` is
+   checked and an invalid origin is rejected.
+2. A unique `connectionId` is assigned and a `TransportConnection` is created.
+3. `onConnect(connectionId, channel)` is invoked. On the robot channel the sim
+   claims the single robot slot, resets D-4 tracking and closes any previous
+   robot connection; on the visualiser channel the connection is simply added
+   to the broadcast set.
+4. The connection is logged with channel and id.
 
 ### 4.2 Message
 
-For every line received on a connection:
-
-1. Buffer incoming bytes until a newline (partial reads are held, not
-   parsed).
-2. Parse the NDJSON line into `{ type, seq, simTick, payload }`.
-3. Malformed JSON: log and ignore — never crash, never disconnect.
-4. Route by `type` to the sim's handler via `onMessage(connectionId,
-   envelope)`.
-5. The channel (port) already implies sender identity; no `clientType`
-   lookup is needed.
+1. Inbound text is buffered until `\n`; a segment longer than 64 KiB (including
+   a trailing partial line) is logged and the socket is hard-closed.
+2. Each complete line is parsed into an envelope. Malformed or non-object JSON
+   and envelopes missing `type`/`seq` are logged and ignored.
+3. `onMessage(connectionId, channel, envelope)` is called with the real channel.
+4. Only `componentCommand` from the active robot connection is considered; all
+   other messages are logged and ignored by the sim.
 
 ### 4.3 Close
 
-When a connection closes:
-
-1. Remove the connection from the subscriber list or robot-handler map.
-2. Invoke `onDisconnect(connectionId, channel)`.
-3. **Robot channel:** sim transitions actuators to safe state — motors stop
-   (persistent actuator state means a clean disconnect must explicitly stop
-   them; see section 5.1).
-4. **Visualiser channel:** remove from the publisher list — no retry, no
-   buffering, no reconnect logic. A reconnecting visualiser is accepted as
-   a brand-new connection and receives the latest snapshot on the next
-   publish cycle.
+1. The connection is removed from the map / subscriber set.
+2. `onDisconnect(connectionId, channel)` is invoked.
+3. **Robot channel:** if this was the active robot slot, the slot is cleared,
+   D-4 state is reset and the sim safe-stops (D-2 layer A). A stale robot's
+   disconnect is logged and ignored so it cannot stop the active robot.
+4. **Visualiser channel:** no retry or buffering in the sim. A reconnecting
+   visualiser is accepted as a brand-new connection and receives the next
+   published snapshot; the client itself resets stale render state (D-5).
 
 ## 5. Robot channel message handling
 
-The robot channel (`ROBOT_PORT`) is persistent and bidirectional: one Java
-controller process connects and stays connected for the life of the run.
+The robot channel is persistent and bidirectional: one active Java controller
+at a time.
 
-### 5.1 Receive `motorCommand` (robot → sim)
+### 5.1 Receive `componentCommand` (robot → sim)
 
-On each `motorCommand` envelope:
+For each inbound envelope, in this order:
 
-1. Validate the envelope (well-formed JSON with expected `type`).
-2. Store it as the **latest command** — persistent actuator state.
-3. Motors keep running at the last commanded speed until a new command
-   overrides it.
-4. The sim never waits for the robot: if the robot is slow to respond, the
-   sim reuses the previous command on the next tick.
+1. Require `channel === "robot"` and `connectionId === activeRobotConnectionId`;
+   otherwise log and ignore before touching state.
+2. Require `seq` and `simTick` to be finite non-negative integers (reject
+   `NaN`, `Infinity`, fractions, negatives, missing values).
+3. Require `seq > lastAppliedSeq` (duplicates/out-of-order ignored).
+4. Require `lastSeenTick === null || simTick >= lastSeenTick - 1` (one tick of
+   reordering slack; older commands are stale).
+5. Require `payload.commands` to be an array of `{ id, value }` with finite
+   numeric values.
 
-### 5.2 Publish `sensorSnapshot` (sim → robot)
+On acceptance only, update `lastAppliedSeq = seq` and
+`lastSeenTick = max(lastSeenTick ?? simTick, simTick)`, then apply wheel values
+(clamped to `[-1, 1]`) to persistent actuator state. Unknown/non-wheel ids are
+logged and ignored individually. A new active robot connection resets both
+tracking values; rejected commands never touch actuators. High-frequency reject
+events are counted and reported with the 5 s achieved-Hz log (plus
+`SimEngine.getState()`), not logged per command.
 
-On each sim tick (or as configured):
+### 5.2 Publish `componentSnapshot` (sim → robot)
 
-1. Read the latest sensor value + `simTick` from the single sensor slot
-   (no queue, no polling — overwritten each tick).
-2. Send `sensorSnapshot` to the connected robot connection (non-blocking).
-3. For MVP iteration 1 there are no sensors, so the payload is empty/
-   placeholder; the message type remains in the protocol for iteration 2.
+Every sim tick the sim builds one snapshot with one reading per manifest
+proximity sensor and sends it to the active robot connection via
+`transport.send(...)` (non-blocking). If no robot is connected, the send is a
+no-op. The snapshot carries the sim tick it describes; the Java bridge resets
+sensor values on disconnect/reconnect/tick rollback and exposes
+`ProximitySensor.latestSimTick()` for staleness checks (`specs/SENSORS.md`).
 
 ## 6. Publish/subscribe to visualiser clients
 
-The visualiser channel (`VISUALISER_PORT`) is primarily unidirectional:
-sim → visualiser (`worldSnapshot`).
+The visualiser channel (`VISUALISER_PORT`) is **unidirectional**: sim →
+visualiser `worldSnapshot` only. No `userControl` messages are sent or handled.
 
 ### 6.1 Publish without waiting
 
-Every sim tick, the sim calls `transport.broadcast("visualiser",
-worldSnapshotEnvelope)`. The sim does not wait for any visualiser to
-acknowledge or drain its socket.
+Every sim tick the sim calls
+`transport.broadcast("visualiser", worldSnapshotEnvelope)`. The envelope has
+`payload.robot: { x, y, heading }` and `payload.obstacles: [...]`. The sim does
+not wait for acknowledgement or for a visualiser to drain its socket.
 
 ### 6.2 Drop-oldest backpressure
 
-If a visualiser falls behind (slow consumer, browser tab backgrounded, full
-TCP send buffer), the transport drops the oldest unpublished snapshot for
-that client and keeps only the latest:
-
-- Per visualiser connection: at most one unpublished `worldSnapshot` is
-  queued. A new snapshot replaces the unpublished one.
-- The sim tick continues at its own pace; rendering lag never slows the
-  sim.
+Each visualiser connection has one pending outbound slot: a newer snapshot
+replaces an unpublished one. The sim tick continues at its own pace; rendering
+lag never slows the sim.
 
 ### 6.3 Disconnected visualisers
 
-- A disconnected visualiser is removed from the subscriber list immediately.
-- No retry, no buffering of missed snapshots, no reconnect logic.
-- A visualiser that reconnects is a new connection; it receives the latest
-  snapshot on the next publish cycle.
-- The sim never blocks on a visualiser; sim and visualiser are fully
-  decoupled.
+A disconnected visualiser is removed immediately. The sim has no retry or
+snapshot replay; the browser client reconnects on its own timer and resets all
+derived state on every open and on tick rollback (D-5).
 
 ## 7. Error handling contract
 
 | Situation | Contract |
 |-----------|----------|
-| Malformed JSON on any line | Log and ignore. Never crash, never disconnect the client. |
-| Partial reads (stream has no message boundaries) | NDJSON buffering: accumulate bytes until `\n`, then parse one complete JSON object. |
-| Controller crash mid-behaviour | WebSocket close fires → `onDisconnect` on robot channel → safe stop motors immediately. |
-| Visualiser reconnect mid-simulation | Accept new connection; send latest snapshot on next publish cycle; sim never blocks. |
-| Hung-but-connected process (socket open, process dead) | Deferred beyond MVP — no heartbeat/timeout for now; WebSocket close is the only safe-stop trigger. |
-| Send failure to one visualiser | That client is dropped from the subscriber list; sim continues. |
+| Malformed / non-object JSON, missing `type`/`seq` | Log and ignore; no crash, no disconnect on bad input alone. |
+| Inbound line > 64 KiB | Log, discard buffer, terminate that connection; an active robot close triggers sim safe stop. |
+| Disallowed `Origin` (`null`, non-http(s), non-loopback host) | Reject upgrade with close code 1008; log. |
+| Port already in use / bind error | `listen()` rejects with the original error; partially bound siblings close; process exits non-zero fast. |
+| `componentCommand` from wrong channel/connection | Log and ignore; D-4 state and actuators untouched. |
+| Duplicate/stale/invalid `componentCommand` | Log/count and ignore; no actuator change. |
+| Active robot socket closes or process dies | Sim safe-stops motors (D-2 layer A); Java had tried to write its zero frame first (layer B). |
+| Stale robot socket closes | Log and ignore; active robot keeps running. |
+| Tick rollback / reconnect seen by Java | Invalidate sensor readings (distance → `Infinity`, tick → 0). |
+| Send failure to one visualiser | Log and close that client; sim continues. |
+| Hung-but-connected process | Deferred beyond MVP: no heartbeat/timeout; WebSocket close is the only close trigger. |
+| Shutdown with an unresponsive peer | Sockets are terminated and server close waits are capped at ~2 s. |
 
-No formal error protocol exists beyond "log everything for debugging."
-There are no error message types on the wire.
+There is no formal error message type on the wire.
 
 ## 8. Future swap to physical hardware
 
 ### 8.1 What would need to change
 
-Implement `PhysicalHardwareTransport` behind the same `Transport`
-interface:
+Implement a transport behind the same `Transport` interface:
 
-- `listen()` opens the physical bus (serial/CAN/motor driver) instead of
-  WebSocket ports.
-- `send()`/`broadcast()` frame commands for the physical motor driver;
-  `onMessage` parses physical sensor frames into `IncomingEnvelope`s.
-- Connection lifecycle maps to physical device attach/detach rather than
-  WebSocket open/close.
-- Safe-stop on detach: stop motors when the physical link goes away.
-
-The sim constructs `PhysicalHardwareTransport` instead of
-`WebSocketTransport`; nothing else in the sim changes.
+- `listen()` opens the physical bus instead of WebSocket ports.
+- `send()`/`broadcast()` frame commands for the driver; `onMessage` parses
+  device frames into envelopes.
+- Attach/detach maps to the connection lifecycle; safe-stop on detach.
 
 ### 8.2 What stays the same
 
-- Wire protocol envelope: `{ type, seq, simTick, payload }`.
-- Message types: `motorCommand`, `sensorSnapshot`, `worldSnapshot`.
-- NDJSON framing semantics (where a text transport is used).
-- Sim logical tick as sequence source of truth.
-- Java framework API: robot code calls `Motor.setSpeed(...)` and reads
-  `sensorSnapshot` through the framework; it never knows whether the
-  backend is WebSocket or physical hardware.
-- Robot code never touches sockets directly in either case.
+- Envelope: `{ type, seq, simTick, payload }`; NDJSON where a text transport is
+  used; `simTick` as freshness source.
+- Message types: `componentCommand`, `componentSnapshot`, `worldSnapshot`.
+- Student API: behaviours use `Mover` and `ProximitySensor` from their `Brain`;
+  they never know which bridge/transport is underneath.
+
+This is a rationale for the abstraction, not an implemented transport.
 
 ## 9. Sequence descriptions
 
 ### 9.1 Robot connects and drives (happy path)
 
 ```
-Robot (Java)                          Transport                      Sim
-   |                                    |                              |
-   |--- WebSocket connect (ROBOT_PORT) --->|                          |
-   |                                    | assign connectionId         |
-   |                                    |-- onConnect(id, "robot") -->|
-   |                                    |                              |
-   |--- motorCommand {type,seq,tick} -->|                              |
-   |                                    |-- onMessage(id, env) ------->|
-   |                                    |                              | store latest command (persistent actuator state)
-   |                                    |                              | apply motor speeds to world model
-   |                                    |                              | read latest sensor slot
-   |<--- sensorSnapshot {..} -----------|                              | send latest sensor value + simTick
-   |                                    |                              |
-   | (repeats each behaviour tick ~20 Hz)                                                |
+Robot (Java)                    Transport                    Sim
+    |                               |                          |
+    |--- WebSocket connect (ROBOT_PORT, no Origin) ------------>|
+    |                               |-- onConnect(id,"robot") ->|
+    |                               |                          | claim slot, reset D-4 state
+    |--- componentCommand {seq,tick,commands} ----------------->|
+    |                               |-- onMessage(id,channel,env)|
+    |                               |                          | validate channel/seq/tick (D-4)
+    |                               |                          | apply wheel values (persistent)
+    |<-- componentSnapshot {seq,tick,readings} -----------------|
+    |            (one batched command per ~20 Hz behaviour tick; snapshots every ~60 Hz)
 ```
 
-### 9.2 Robot disconnects → safe stop
+### 9.2 Robot disconnects → two-layer safe stop (D-2)
 
 ```
-Robot (Java)                          Transport                      Sim
-   |                                    |                              |
-   |--- process dies / socket closes -->|                              |
-   |                                    |-- onDisconnect(id, "robot")->|
-   |                                    |                              | stop motors (safe stop)
-   |                                    |                              | persistent actuator state cleared
+Robot (Java)                    Transport                    Sim
+    |                               |                          |
+    |-- stop behaviour tick                                    |
+    |-- write componentCommand: every wheel id = 0.0            |
+    |   (still open: send -> flush) --------------------------->|
+    |-- clear open, close socket ------------------------------>|
+    |                               |-- onDisconnect ---------->|
+    |                               |                          | zero actuators; clear slot
 ```
+
+If the Java process dies without writing the frame, the close event alone
+still triggers layer A. A displaced/stale robot's close does not stop the
+active robot.
 
 ### 9.3 Visualiser connects and receives snapshots
 
 ```
-Visualiser (browser)                  Transport                      Sim
-   |                                    |                              |
-   |--- WebSocket connect (VIS_PORT)--->|                              |
-   |                                    | assign connectionId         |
-   |                                    |-- onConnect(id, "visualiser")->|
-   |                                    |                              | add to visualiser subscriber list
-   |                                    |                              |
-   |                                    |                              | each sim tick:
-   |<--- worldSnapshot {..} ------------|                              |-- broadcast("visualiser", env) -->
-   |<--- worldSnapshot {..} ------------|                              |   (non-blocking, drop-oldest if lagging)
-   |                                    |                              |
-   |--- tab closes / socket closes ----->|                              |
-   |                                    |-- onDisconnect(id, "visualiser")->
-   |                                    |                              | remove from subscriber list (no retry, no buffering)
+Visualiser (browser)            Transport                    Sim
+    |--- WebSocket connect (VISUALISER_PORT, allowed Origin) -->|
+    |                               |-- onConnect(id,"visualiser")>
+    |                               |                          | add to broadcast set
+    |<-- worldSnapshot {robot,obstacles} (per tick) ------------|
+    |                               |                          | drop-oldest if tab is behind
+    |--- socket closes ---------------------------------------->|
+    |                               |-- onDisconnect ---------->| remove from set
+    |-- client resets state and reconnects on its own timer (D-5)
 ```
 
 ## 10. Deferred beyond MVP
 
-- Heartbeat/timeout for hung-process detection (safe-stop relies on WebSocket
-  close only).
-- Binary framing (revisit only if NDJSON parsing proves a bottleneck).
-- `userControl` messages on the visualiser channel.
-- Robot IDs / multi-robot support.
-- Formal error protocol (malformed JSON is logged and ignored).
-- `PhysicalHardwareTransport` implementation.
+- Heartbeat/timeout for hung-process detection.
+- Generic sensor lookup in the Java `Brain` (fixed ids per D-3).
+- `userControl` on the visualiser channel; any other visualiser → sim traffic.
+- Binary framing; multi-robot support; formal error protocol.
+- `PhysicalHardwareTransport`.

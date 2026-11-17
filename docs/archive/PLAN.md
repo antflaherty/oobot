@@ -1,5 +1,7 @@
 # Plan of Attack
 
+> **Historical iteration-1 plan — superseded by the implemented component-based system.** See [README.md](../../README.md), [ARCHITECTURE.md](../../ARCHITECTURE.md) and [DECISIONS.md](../DECISIONS.md) for the current design.
+
 Dependency-ordered plan for building the oobot MVP. Items are grouped into phases;
 items within a phase can be done in parallel unless marked as blocking.
 

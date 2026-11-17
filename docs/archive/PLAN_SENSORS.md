@@ -1,5 +1,7 @@
 # Sensor Implementation Plan — Iteration 2
 
+> **Historical iteration-2 plan — superseded by the implemented id-addressed `ProximitySensor` / `componentSnapshot` model.** See [README.md](../../README.md), [SENSORS.md](../../specs/SENSORS.md) and [DECISIONS.md](../DECISIONS.md) for the current design.
+
 Object Oriented Robotics (oobot)
 
 **Status:** plan. Refines `specs/SENSORS.md` into implementation work with

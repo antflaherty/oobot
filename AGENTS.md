@@ -3,6 +3,15 @@
 Context for AI coding assistants working on this repo. Read this first; it
 replaces scanning the whole repository. Keep it in sync with the code.
 
+## Current work
+
+The repo is partway through the pre-feature hardening pass: `HARDENING_PLAN.md`
+is the authoritative scope, wave plan and merge-gate checklist, and
+`docs/DECISIONS.md` records the locked decisions (D-1…D-6). Where this file
+disagrees with either, they win. `docs/DOC_AUDIT.md` is the stale-doc work list.
+`next.md` is the user's personal notes and is strictly off-limits (ground rule
+7 of the plan) — never read, edit, stage, commit or ignore it.
+
 ## One-liner
 
 A Java robot controller (separate process) drives a robot in a
@@ -15,33 +24,40 @@ a single sim server, the Java robot, and the visualiser.
 ```
 oobot/
 ├── AGENTS.md                 # this file — assistant context
+├── HARDENING_PLAN.md         # authoritative hardening scope, waves, merge gates
 ├── README.md                 # user-facing getting started
 ├── ARCHITECTURE.md           # high-level architecture & boundaries
 ├── MVP.md                    # scope, in/out of scope, success criteria
-├── PLAN.md                   # implementation plan of attack
-├── DESIGN_REVIEW.md          # resolved open questions / decisions
+├── DESIGN_REVIEW.md          # resolved open questions / decisions (historical)
 ├── FUTURE.md                 # post-MVP ideas
-├── package.json              # root dev scripts (npm run dev)
-├── scripts/dev.js            # one-command dev startup (sim → viz → robot)
-├── robots/                   # shared robot component manifest(s)
+├── package.json              # npm workspaces + root dev scripts (npm run dev)
+├── package-lock.json         # committed lockfile (D-6)
+├── scripts/
+│   ├── dev.js                # one-command dev startup (sim → viz → robot)
+│   └── runRobot.js           # starts robot.jar with an absolute --robot path
+├── robots/
 │   └── default.json          # v2 component layout (id, type, angle, offset)
 ├── simulator/
 │   ├── server/               # Node.js/TS sim + WebSocket server (ports 8080/8081)
-│   │   ├── src/index.ts      # server entry point
-│   │   ├── src/sim.ts        # world model + fixed timestep
-│   │   ├── src/transport.ts  # WebSocket transport (two channels)
+│   │   ├── src/index.ts      # entry point (--robot, --world, port env vars)
+│   │   ├── src/sim.ts        # sim engine: timestep, command ownership, safe stop
+│   │   ├── src/transport.ts  # WebSocket transport (two channels, per-conn seq)
 │   │   ├── src/types.ts      # shared TS types
+│   │   ├── src/world.ts      # world model, kinematics, collision, world validation
+│   │   ├── src/sensor.ts     # box-edge ray casting for proximity sensors
 │   │   ├── src/robotDescription.ts # TS mirror/loader of the shared manifest
-│   │   └── src/world.ts      # world model helpers
+│   │   ├── worlds/maze.json  # default obstacle world (loaded by --world)
+│   │   ├── test/**           # node:test suites + manifest fixtures
 │   │   ├── package.json      # ts-node, ws, typescript
 │   │   └── tsconfig.json
 │   └── visualiser/           # vanilla TS + HTML5 canvas (vite)
 │       ├── src/main.ts       # entry: live WS or hardcoded fallback stream
-│       ├── src/liveStream.ts # WebSocket client + NDJSON + interpolation
-│       ├── src/snapshotStream.ts
+│       ├── src/liveStream.ts # WS client + NDJSON buffer + interpolation/reset
+│       ├── src/snapshotStream.ts # hardcoded fallback keyframes
 │       ├── src/renderer.ts   # canvas drawing
 │       ├── src/math.ts
 │       ├── src/types.ts
+│       ├── test/**           # node:test suites
 │       ├── index.html
 │       ├── package.json      # vite, typescript
 │       └── tsconfig.json
@@ -51,51 +67,61 @@ oobot/
 │   ├── gradle/libs.versions.toml  # centralised dependency versions
 │   ├── gradlew / gradlew.bat # Gradle wrapper (downloads Gradle 8.10.2)
 │   ├── MODERNISATION.md      # build/library upgrade progress tracker
-│   ├── robot.jar             # prebuilt fat JAR (gitignored but committed here for dev)
+│   ├── robot.jar             # LOCAL build output — gitignored, not committed
 │   ├── src/main/resources/logback.xml  # logging config
-│   ├── src/main/java/oobot/robot/
-│   │   ├── RobotController.java  # main entry point (wires student + framework)
-│   │   ├── student/              # ← STUDENT CODE AREA (DI happens here)
-│   │   │   ├── RobotBehaviour.java  # student implements: init() / update()
-│   │   │   ├── Mover.java           # student writes: wheel→movement abstraction
-│   │   │   ├── Brain.java           # student writes: DI/wiring of components + behaviour
-│   │   │   ├── Component.java       # generic id-addressed component (id only)
-│   │   │   ├── Wheel.java           # student-facing wheel component
-│   │   │   └── ProximitySensor.java # student-facing proximity component
-│   │   ├── example/               # example implementations (reference, not student)
-│   │   │   ├── WheeledMover.java    # reference Mover implementation
-│   │   │   ├── DefaultBrain.java    # reference Brain (DI) implementation
-│   │   │   ├── SquareTraceBehaviour.java (default example)
-│   │   │   ├── CircleTraceBehaviour.java
-│   │   │   ├── HeartTraceBehaviour.java
-│   │   │   ├── WallAvoidBehaviour.java
-│   │   │   └── WallFollowRightBehaviour.java
-│   │   ├── core/                  # framework core (not student)
-│   │   │   └── BehaviourLoop.java
-│   │   ├── description/           # component-manifest model (not student)
-│   │   │   └── ...                # Java mirror of robots/default.json
-│   │   ├── bridge/sim/            # sim bridge (not student)
-│   │   │   ├── SimRobot.java
-│   │   │   ├── SimProximitySensor.java
-│   │   │   └── SimWheel.java
-│   │   └── transport/             # transport (not student)
-│   │       ├── WsConnection.java    # OkHttp WebSocket client
-│   │       ├── Json.java            # Jackson serialisation
-│   │       ├── WireMessage.java     # sealed interface (polymorphic envelope)
-│   │       ├── ComponentCommandMessage.java / ComponentSnapshotMessage.java
-│   │       ├── ComponentValue.java / ComponentReading.java
-│   │       ├── ComponentCommandPayload.java / ComponentSnapshotPayload.java
-│   │       └── WsListener.java
-│   └── README.md
+│   ├── src/test/**           # JUnit 5 tests + manifest fixtures
+│   ├── README.md
+│   └── src/main/java/oobot/robot/
+│       ├── RobotController.java  # picocli entry point (wires student + framework)
+│       ├── student/              # ← STUDENT CODE AREA (DI happens here)
+│       │   ├── RobotBehaviour.java  # student implements: init() / update()
+│       │   ├── Mover.java           # student writes: wheel→movement abstraction
+│       │   ├── Brain.java           # student writes: DI/wiring; FIXED sensor ids (D-3)
+│       │   ├── Component.java       # generic id-addressed component (id only)
+│       │   ├── Wheel.java           # student-facing wheel component
+│       │   ├── ProximitySensor.java # student-facing proximity component
+│       │   └── BrownianMotionBehaviour.java  # opt-in behaviour (not the default)
+│       ├── example/               # example implementations (reference, not student)
+│       │   ├── WheeledMover.java    # reference Mover implementation
+│       │   ├── DefaultBrain.java    # reference Brain (DI) implementation
+│       │   ├── SquareTraceBehaviour.java
+│       │   ├── CircleTraceBehaviour.java
+│       │   ├── HeartTraceBehaviour.java
+│       │   ├── WallAvoidBehaviour.java
+│       │   └── WallFollowRightBehaviour.java  # DEFAULT behaviour
+│       ├── core/                  # framework core (not student)
+│       │   └── BehaviourLoop.java
+│       ├── description/           # component-manifest model (not student)
+│       │   └── ...                # Java mirror of robots/default.json
+│       ├── bridge/                # platform abstraction (not student)
+│       │   └── RobotPlatform.java
+│       ├── bridge/sim/            # sim bridge (not student)
+│       │   ├── SimRobot.java      # lifecycle, batching, two-layer safe stop
+│       │   ├── SimProximitySensor.java
+│       │   └── SimWheel.java
+│       └── transport/             # transport (not student)
+│           ├── WsConnection.java    # OkHttp WebSocket client
+│           ├── Json.java            # Jackson serialisation
+│           ├── WireMessage.java     # sealed interface (polymorphic envelope)
+│           ├── ComponentCommandMessage.java / ComponentSnapshotMessage.java
+│           ├── ComponentValue.java / ComponentReading.java
+│           ├── ComponentCommandPayload.java / ComponentSnapshotPayload.java
+│           └── WsListener.java
 ├── specs/                    # wire contract & component specs (read-only reference)
 │   ├── WIRE_PROTOCOL.md      # NDJSON envelope, ports, message types
 │   ├── COMMS.md              # transport interface (swappable)
 │   ├── COMPONENTS.md         # per-component responsibilities
 │   ├── ROBOT_DESCRIPTION.md  # manifest schema + id-addressed wire messages
 │   ├── ROBOT_LAUNCH.md       # how the Java controller is started
-│   ├── SENSORS.md            # informal sensor notes (not MVP spec)
-│   └── WORLD_FORMAT.md       # world model (iteration 1: bounded box)
-└── .gitignore                # node_modules, dist, build, *.jar, .idea, .vscode
+│   ├── SENSORS.md            # proximity-sensor model (iteration 2)
+│   └── WORLD_FORMAT.md       # world model: bounded box + maze obstacles
+├── docs/
+│   ├── DECISIONS.md          # locked D-1..D-6 decisions (authoritative)
+│   ├── DOC_AUDIT.md          # W3 documentation work list
+│   └── archive/              # historical plans, kept for context only
+│       ├── PLAN.md
+│       └── PLAN_SENSORS.md
+└── .gitignore                # node_modules, dist, dist-test, build, jars, IDE files
 ```
 
 ## How to run (one command)
@@ -103,50 +129,78 @@ oobot/
 From repo root (requires Node.js ≥ 20, npm ≥ 10, JDK 21+):
 
 ```bash
-npm install        # once (installs sub-package deps; root has no deps of its own)
+npm install        # installs both npm workspaces (sim server + visualiser); lockfiles are committed
 npm run build:robot # once (builds robot.jar via Gradle — wrapper downloads Gradle on first run)
 npm run dev        # starts sim server, visualiser dev server, example robot
 ```
 
-`scripts/dev.js` starts the sim first, waits for port 8080, then starts the
-visualiser, then the Java robot. Opens `http://localhost:5173` for the visualiser.
+`scripts/dev.js` starts the sim first, probes `127.0.0.1` on the robot port
+(`ROBOT_PORT`, default 8080) with a 30 s startup timeout, then starts the
+visualiser and the Java robot with `--behaviour wall-follow-right`.
+SIGINT/SIGTERM clean up all children. Opens `http://localhost:5173` for the
+visualiser.
 
 ### Start components individually
 
 | Component | Command | Directory |
 |---|---|---|
-| Sim server | `npm run dev` (ts-node) | `simulator/server/` |
-| Visualiser | `npm run dev` (vite) | `simulator/visualiser/` |
-| Robot | `java -jar robot.jar --host localhost --port 8080 --robot ../robots/default.json` | `robot-framework/` |
+| Sim server | `npm run dev:server` (ts-node) | repo root (or `npm run dev` in `simulator/server/`) |
+| Visualiser | `npm run dev:visualiser` (vite) | repo root (or `npm run dev` in `simulator/visualiser/`) |
+| Robot | `npm run dev:robot` (recommended — `scripts/runRobot.js` passes an absolute `--robot` path), or `java -jar robot.jar --host localhost --port 8080 --behaviour wall-follow-right --robot <path>` | repo root / `robot-framework/` |
 
-Both the robot and the sim server accept `--robot <path>` to select a component
-manifest (default layout: `robots/default.json`); `npm run dev` passes an
-absolute path. It decides which id-addressed components the robot exposes and
-their mount angles. The visualiser does not read the manifest.
+The robot and sim server both accept `--robot <path>` (v2 component manifest);
+their defaults resolve relative to their own code/JAR so standalone commands
+work from any CWD. The sim also accepts `--world <path>` for the obstacle world
+(default `simulator/server/worlds/maze.json`). The manifest decides which
+id-addressed components exist and their mount angles; the world file supplies
+obstacles and the start pose. The visualiser reads neither — it renders
+`worldSnapshot.payload.obstacles`.
 
-### Build
+### Build and test
 
 - Sim server: `cd simulator/server && npm run build` (tsc → `dist/`)
 - Typecheck sim: `cd simulator/server && npm run typecheck`
+- Sim tests: `cd simulator/server && npm test` (node:test → `dist-test/`)
 - Visualiser: `cd simulator/visualiser && npm run build` (vite build + tsc --noEmit)
+- Visualiser tests: `cd simulator/visualiser && npm test`
 - Robot JAR: `npm run build:robot` (runs `./gradlew fatJar` in `robot-framework/` → `robot.jar`)
   or `cd robot-framework && ./gradlew fatJar` directly
+- Robot tests: `cd robot-framework && ./gradlew test`
 
 ## Wire protocol (the contract everything agrees on)
 
 - Format: newline-delimited JSON (NDJSON), one JSON object per line.
-- Envelope: `{ "type": "...", "seq": 0, "simTick": 0, "payload": { ... } }`
-- `simTick` is the source of truth for sequencing/staleness (not wall-clock).
+- Envelope: `{ "type": "...", "seq": 0, "simTick": 0, "payload": { ... } }`.
+  `seq` is assigned per outgoing connection by the transport (two visualisers
+  get independent monotonic sequences); `simTick` is the sim's logical clock and
+  the source of truth for freshness, not wall-clock.
 - Two channels from one sim server process, distinguished by port:
   - **Robot channel** `ws://localhost:8080` — `componentCommand` (robot→sim;
     `payload.commands: [{id, value}]`), `componentSnapshot` (sim→robot;
-    `payload.readings: [{id, value|null}]`). Persistent, bidirectional.
-  - **Visualiser channel** `ws://localhost:8081` — `worldSnapshot` (sim→visualiser).
-    Unidirectional (MVP).
-- Both bind `0.0.0.0`; only `localhost` origins accepted (or no Origin header).
-- On robot WebSocket close: motors stop (safe stop). No heartbeat/timeout yet.
+    `payload.readings: [{id, value|null}]`). Persistent, bidirectional; single
+    active robot slot (a new robot closes the previous one).
+  - **Visualiser channel** `ws://localhost:8081` — `worldSnapshot`
+    (`payload.robot: {x, y, heading}`, `payload.obstacles: [...]`) (sim→visualiser).
+    Unidirectional (MVP); multiple tabs are supported.
+- Ports default to 8080/8081 and can be overridden via `ROBOT_PORT` /
+  `VISUALISER_PORT` (validated as integers in 1–65535).
+- Sockets bind `0.0.0.0` (IPv4 client compatibility); no Origin header or an
+  http(s) localhost/loopback Origin is accepted, `Origin: null` and other
+  origins are rejected. Inbound lines are length-capped and shutdown is bounded.
+- Commands are accepted only from the active robot connection: `seq` and
+  `simTick` must be finite non-negative integers, `seq` must strictly increase
+  and `simTick` must be no more than one tick older than the last accepted
+  command (D-4). Rejected commands never touch actuator state.
+- **Safe stop has two independent layers (D-2):** the sim zeroes motors when the
+  active robot socket closes (and on shutdown); the Java bridge writes one
+  `componentCommand` with every wheel id at `0.0` **before** closing or
+  reconnecting the socket. No heartbeat/timeout yet. Java batches all wheel
+  changes from a behaviour tick into a single command frame.
+- Visualiser state (snapshot buffer, interpolation clock, trail) resets on every
+  connect/reconnect and when `simTick` goes backwards (D-5).
 
 Full spec: `specs/WIRE_PROTOCOL.md`. Transport interface: `specs/COMMS.md`.
+Locked decisions: `docs/DECISIONS.md`.
 
 ## Student-facing Java API (robot code touches only this)
 
@@ -163,14 +217,21 @@ and use the components exposed by their `Brain`.
 - **`Component`** — generic interface implemented by every component; declares
   only `id()`.
 - **`Wheel`** — a `Component` that drives the robot: `angle()` (mount angle in
-  radians), `clockwise()` / `antiClockwise()` / `stop()`.
+  radians; `sin(angle) > 0.9` = left, `< -0.9` = right), `clockwise()` /
+  `antiClockwise()` / `stop()`.
 - **`ProximitySensor`** — a `Component` with `latestSimTick()` (tick of the most
   recent reading) and `distance()` in its mounted direction (`Infinity` if
-  nothing detected).
+  nothing detected). `latestSimTick()` lets behaviour code detect stale data;
+  the bridge's staleness threshold is 30 sim ticks.
 - **`Mover`** — high-level wheel-to-movement abstraction: translates
-  `forward()` / `turnRight()` / `turnLeft()` / `stop()` into per-wheel actions.
+  `forward()` / `backward()` / `turnRight()` / `turnLeft()` / `stop()` into
+  per-wheel actions.
 - **`Brain`** — the DI/wiring interface: exposes `mover()`, `frontSensor()` and
-  `rightSensor()`, plus `setBehaviour(...)` and `tick()`.
+  `rightSensor()`, plus `setBehaviour(...)` and `tick()`. **Constraint (D-3):**
+  these accessors are fixed-id, not generic — `frontSensor()` must resolve
+  `front-sensor` and `rightSensor()` must resolve `right-sensor`; the controller
+  fails at startup if either `proximitySensor` id is missing. A manifest may
+  declare other sensors, but this API cannot address them.
 
 Student code never touches sockets, JSON, motor power values, or wheel mounting —
 it uses the `Mover` and sensors exposed by its `Brain`. The behaviour loop
@@ -182,10 +243,11 @@ Components are placed by **mount angle** plus a radial **offset**, declared in
 the v2 manifest `robots/default.json`. `angle` is in radians: 0 = robot forward,
 positive = counter-clockwise (right = -π/2). `offset` is the radial distance
 from the robot centre (wheels only; default `0.25`, must be finite and > 0).
-Wheels still roll along the robot's heading (tangentially); sensors cast rays in
-their mounted direction. The layout is data, not code: both the Java robot and
-sim server load it at startup. The visualiser does not read the manifest
-(visualiser changes are deferred).
+Wheels still roll along the robot's heading (tangentially); each sensor casts a
+ray along `pose.heading + component.angle` against box edges and obstacles, and
+the nearest hit wins. The layout is data, not code: both the Java robot and sim
+server load it at startup. The visualiser does not read the manifest — it draws
+the obstacles supplied in `worldSnapshot`.
 
 ```json
 {
@@ -207,13 +269,28 @@ sim server load it at startup. The visualiser does not read the manifest
   `offset_left·sin(angle_left) − offset_right·sin(angle_right)` (`0.5` for the
   default manifest). The sim uses this in place of the default world config's
   `trackWidth`; the robot stays a point for sensing/collision.
+- Kinematics (D-1): the world box stays in world units, with
+  `WORLD_UNITS_PER_METRE = 100`. Wheel powers are converted to m/s before
+  computing angular velocity, then linear speed is converted back to world
+  units/s so travel speeds are unchanged:
+
+  ```
+  v_l = clamp(p_left,  -1, 1) * maxSpeed / 100   // m/s
+  v_r = clamp(p_right, -1, 1) * maxSpeed / 100   // m/s
+  linear  = (v_l + v_r) / 2 * 100                // world units/s
+  angular = (v_r - v_l) / trackWidth             // rad/s (trackWidth in metres)
+  ```
+
+  With defaults (`maxSpeed=100`, track width `0.5`) full differential drive is
+  `4 rad/s ≈ 229°/s` and 50% differential is `2 rad/s`. There is no independent
+  `maxAngularSpeed` clamp; turns are proportional to input.
 
 ```java
 interface Component {
     String id();
 }
 interface Wheel extends Component {
-    double angle();           // mount angle (rad): 0 = forward, + = CCW; left if sin > 0, right if sin < 0
+    double angle();           // mount angle (rad): 0 = forward, + = CCW; left if sin > 0.9, right if sin < -0.9
     void clockwise();
     void antiClockwise();
     void stop();
@@ -223,29 +300,36 @@ interface ProximitySensor extends Component {
     double distance();            // Infinity if nothing detected
 }
 interface RobotBehaviour { void init(); void update(); }   // student implements (~20 Hz)
-interface Mover { void forward(); void turnRight(); void turnLeft(); void stop(); }
+interface Mover {                 // high-level, wheel-agnostic movement
+    void forward(); void backward(); void turnRight(); void turnLeft(); void stop();
+}
 interface Brain {                 // student writes DI/wiring implementation
     Mover mover();
-    ProximitySensor frontSensor();
-    ProximitySensor rightSensor();
-    void setBehaviour(RobotBehaviour behaviour);
+    ProximitySensor frontSensor();  // fixed id "front-sensor" (D-3)
+    ProximitySensor rightSensor();  // fixed id "right-sensor" (D-3)
+    void setBehaviour(RobotBehaviour behaviour); // null stops motion
     void tick();                  // delegates to current behaviour.update()
 }
 ```
 
 Example implementations (reference, not student code) live in `oobot.robot.example`
 (`WheeledMover` is the reference Mover; `DefaultBrain` is the reference Brain;
-`WallFollowRightBehaviour` is the default behaviour).
+`WallFollowRightBehaviour` is the default behaviour selected by `--behaviour`
+and `npm run dev`). `BrownianMotionBehaviour` lives in the student package and
+is opt-in (`--behaviour brownian`).
 `WheeledMover` takes the full wheel list (`WheeledMover(List<Wheel>)`) and derives
 left/right roles from each wheel's `angle()`; `RobotController` supplies that
 list via `ComponentRegistry.wheels()`, which returns the bound `Wheel` handles
 sorted by ascending mount angle.
-The bridge (`oobot.robot.bridge.sim.SimRobot`) hides WebSocket, NDJSON framing,
-reconnection, and concurrency.
+The platform abstraction is `oobot.robot.bridge.RobotPlatform`; its sim
+implementation (`oobot.robot.bridge.sim.SimRobot`) hides WebSocket, NDJSON
+framing, reconnection, batched commands (one `componentCommand` per tick),
+two-layer safe stop, and concurrency.
 
 To add a new behaviour: create a class implementing `RobotBehaviour`, use the
 `Mover` and sensors exposed by your `Brain`, and register everything in
-`oobot.robot.RobotController` (`createBehaviour`). Rebuild the JAR.
+`oobot.robot.RobotController` (`VALID_BEHAVIOURS` and `createBehaviour`).
+Rebuild the JAR with `npm run build:robot`.
 
 ## Coding conventions & constraints
 
@@ -255,32 +339,42 @@ To add a new behaviour: create a class implementing `RobotBehaviour`, use the
   JDK 21+. Fat JAR built with `./gradlew fatJar`.
 - Simulation owns world state; robot code only commands hardware via the framework.
 - Rendering never drives or blocks simulation timing. Sim runs on its own fixed ~60 Hz timestep.
-- Keep the MVP small. Defer: obstacles with complex shapes, heartbeat, multiple robots, tests.
-- No test files exist yet in any component.
+- Axis-aligned box obstacles, two id-addressed proximity sensors and six
+  behaviours are implemented. Defer: complex obstacle shapes, heartbeat,
+  multiple robots, genuinely generic `Brain` sensor lookup.
+- Tests exist in all three packages: `simulator/server/test/**` and
+  `simulator/visualiser/test/**` (node:test), `robot-framework/src/test/**`
+  (JUnit 5 + byte-identical manifest fixtures). Run them before changing code.
+- Lockfiles are committed; `robot.jar` is a local, gitignored build output.
 
 ## Where specs live (reference, rarely need editing)
 
 `specs/WIRE_PROTOCOL.md`, `COMMS.md`, `COMPONENTS.md`, `ROBOT_DESCRIPTION.md`,
 `ROBOT_LAUNCH.md`, `SENSORS.md`, `WORLD_FORMAT.md`. Edit these only when the
 wire contract or component boundaries change; code is source of truth otherwise.
+Locked decisions live in `docs/DECISIONS.md`; the doc audit / rewrite work list
+is `docs/DOC_AUDIT.md`. `docs/archive/` holds superseded iteration-1 plans.
 
 ## Common tasks & where to start
 
 | Task | Files to touch |
 |---|---|
-| Change sim world/timestep/collision | `simulator/server/src/sim.ts`, `world.ts` |
-| Add a sim→visualiser message type | `simulator/server/src/transport.ts`, `types.ts` + `specs/WIRE_PROTOCOL.md` |
-| Change robot→sim command handling | `simulator/server/src/transport.ts` |
+| Change sim world/timestep/collision/sensing | `simulator/server/src/world.ts`, `sensor.ts`, `sim.ts`, `worlds/maze.json` |
+| Add a sim→visualiser message type | `simulator/server/src/transport.ts`, `types.ts`, `sim.ts` + `specs/WIRE_PROTOCOL.md` |
+| Change robot→sim command handling / stale-command rules | `simulator/server/src/sim.ts`, `transport.ts`, `types.ts` |
 | Add a robot behaviour | New `*.java` implementing `RobotBehaviour` in `robot-framework/src/main/java/oobot/robot/student/` (or `example/`), register in `RobotController.createBehaviour` + `VALID_BEHAVIOURS`, then `npm run build:robot` |
 | Change the Java hardware API | `oobot/robot/student/{RobotBehaviour,Mover,Component,Wheel,ProximitySensor,Brain}.java` + `oobot/robot/description/` |
-| Change the robot component layout | `robots/default.json`, `oobot/robot/description/`, `simulator/server/src/robotDescription.ts` |
+| Change the robot component layout | `robots/default.json`, `oobot/robot/description/`, `simulator/server/src/robotDescription.ts` + both fixture directories |
+| Change world file / spawn validation | `simulator/server/src/world.ts`, `worlds/maze.json` + `specs/WORLD_FORMAT.md` |
 | Change visualiser rendering | `simulator/visualiser/src/renderer.ts`, `main.ts` |
-| Change visualiser WS client | `simulator/visualiser/src/liveStream.ts` |
-| One-command dev startup | `scripts/dev.js` + root `package.json` |
+| Change visualiser WS client / reconnect reset | `simulator/visualiser/src/liveStream.ts` |
+| One-command dev startup | `scripts/dev.js`, `scripts/runRobot.js` + root `package.json` |
 
 ## What to avoid
 
 - Don't let rendering block or drive the sim tick.
 - Don't reintroduce hand-rolled JSON/WebSocket code — use Jackson/OkHttp (see `robot-framework/MODERNISATION.md`).
 - Don't make robot code depend on the sim's implementation language — the framework boundary is intentional.
-- Don't commit `node_modules/`, `dist/`, `build/`, `*.jar`, `.idea/`, `.vscode/` (covered by `.gitignore`).
+- Don't describe `motorCommand` / `sensorSnapshot` or static `Sensors` as current; they were replaced by id-addressed `componentCommand` / `componentSnapshot` and `ProximitySensor`.
+- Don't touch `next.md` (user's personal notes; ground rule 7 of `HARDENING_PLAN.md`).
+- Don't commit `node_modules/`, `dist/`, `dist-test/`, `build/`, `*.jar`, `.idea/`, `.vscode/` (covered by `.gitignore`); lockfiles *are* committed.

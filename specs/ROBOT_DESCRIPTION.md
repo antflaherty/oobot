@@ -1,26 +1,29 @@
 # Robot Description & Component Registry (v2)
+
 Canonical contract for the shared component manifest and id-addressed wire
-messages. The manifest is checked into the repo and loaded independently by
-the Java controller and the sim at startup.
+messages. The manifest is checked into the repo (`robots/default.json`) and
+loaded independently by the Java controller and the sim at startup. The
+visualiser does not read it.
 
 ## Conventions (fixed)
 
 | Area | Decision |
 |---|---|
-| Manifest | Shared JSON (`robots/default.json`), loaded by Java + sim at startup |
-| Schema | v2; known types `wheel`, `proximitySensor` |
+| Manifest | Shared v2 JSON, loaded by Java (`RobotDescription.load(Path)`) and sim (`loadRobotDescription(path)`) at startup |
+| Schema | `schemaVersion` must be the integer literal `2`; known types are exactly `wheel` and `proximitySensor` |
 | Geometry | Wheels placed by mount `angle` (radians, 0 = forward, + = CCW) plus radial `offset`; robot stays a point for sensing/collision |
 | Wheels | Roll tangentially along heading; no `side` field — left/right derived from `sin(angle)` |
-| Sensors | Sim uses the declared `angle` for rays from the robot centre (no hardcoded front/right) |
-| Track width | `y_left - y_right` from derived wheel positions; replaces `DEFAULT_WORLD_CONFIG.trackWidth` at sim construction |
-| Layouts | Change angles/offsets via the manifest; different backends via `RobotPlatform` |
-| Java API | Fully generic — no `leftWheel()`, `rightWheel()`, `Sensors`; derived roles, `Wheel.angle()` |
-| Wire | Generalised to component ids (**breaking**); envelope + NDJSON unchanged |
-| Visualiser | Deferred |
+| Sensors | Sim casts each ray from the robot centre at `heading + component.angle`; sensors have no offset |
+| Track width | `y_left - y_right` from derived wheel positions; overrides `DEFAULT_WORLD_CONFIG.trackWidth` in the sim |
+| Kinematics (D-1) | `WORLD_UNITS_PER_METRE = 100`; wheel powers → m/s for angular rate, linear speed stays in world units/s; no `maxAngularSpeed` clamp |
+| Java API | Component model is id-addressed, but `Brain.frontSensor()` / `rightSensor()` are fixed-id accessors (D-3); there is no generic `leftWheel()`, `rightWheel()` or static `Sensors` |
+| Wire | Id-addressed `componentCommand` / `componentSnapshot`; envelope and NDJSON unchanged |
+| Visualiser | Renders obstacles from `worldSnapshot`; does not read the manifest |
 
 Wheel position = `offset * (cos(angle), sin(angle))`; lateral coordinate `y`.
-Derived role: `sin(angle) > 0.9` → left, `sin(angle) < -0.9` → right (exactly
-one of each; other angles rejected). Default track width = `0.5`.
+Derived role: `sin(angle) > 0.9` → left, `sin(angle) < -0.9` → right. Exactly
+one of each is required; all other angles are rejected. Default track width
+for the shipped manifest is `0.5`.
 
 ## Manifest — `robots/default.json`
 
@@ -29,29 +32,65 @@ one of each; other angles rejected). Default track width = `0.5`.
   "schemaVersion": 2,
   "name": "default-two-wheel",
   "components": [
-    { "id": "left-wheel",   "type": "wheel",           "angle": 1.5707963267948966,  "offset": 0.25 },
+    { "id": "left-wheel",   "type": "wheel",           "angle":  1.5707963267948966, "offset": 0.25 },
     { "id": "right-wheel",  "type": "wheel",           "angle": -1.5707963267948966, "offset": 0.25 },
-    { "id": "front-sensor", "type": "proximitySensor", "angle": 0.0 },
+    { "id": "front-sensor", "type": "proximitySensor", "angle":  0.0 },
     { "id": "right-sensor", "type": "proximitySensor", "angle": -1.5707963267948966 }
   ]
 }
 ```
 
-Validation — identical in Java and TS; `schemaVersion` must be `2`; `side`
-rejected if present; other unknown extra fields ignored:
+## Validation (identical decisions in Java and TypeScript)
 
-| Rule | Requirement |
+Both loaders must accept/reject the same inputs. The authoritative fixture set
+is specified in `docs/DECISIONS.md` and implemented byte-identically in
+`simulator/server/test/fixtures/` and
+`robot-framework/src/test/resources/fixtures/`.
+
+| Field | Rule |
 |---|---|
-| `id` | unique, non-empty |
-| `type` | ∈ {`wheel`, `proximitySensor`} |
-| `angle` | finite number (radians, 0 = forward, + = CCW) |
-| `schemaVersion` | must be `2`, else fail fast naming the file path |
-| `side` | rejected if present |
-| `wheel.offset` | optional, default `0.25`; finite and > 0 when present |
-| `proximitySensor.offset` | must not be declared |
-| `wheel` angle | `sin(angle) > 0.9` → left, `sin(angle) < -0.9` → right; exactly one of each; other angles rejected |
+| `schemaVersion` | Integer literal `2` only. `1`, `2.0`, strings, missing values rejected. TS inspects the raw token because `JSON.parse("2.0")` yields `2`; Java requires an integral `IntNode`. |
+| `name` | String, non-blank after `trim()`. |
+| `components` | Array (required). |
+| `id` | String, non-blank after `trim()`, unique across the manifest. |
+| `type` | Exactly `wheel` or `proximitySensor` (case-sensitive; no aliases). |
+| `angle` | Finite number (radians; 0 = forward, + = CCW). |
+| `wheel.offset` | Optional, default `0.25`; when present must be finite and `> 0`. |
+| `proximitySensor.offset` | Forbidden — reject if the key is present. |
+| `side` | Forbidden on any component — reject if the key is present. |
+| Wheel roles | Exactly one wheel with `sin(angle) > 0.9` (left) and one with `sin(angle) < -0.9` (right); other angles rejected. |
+| Unknown extra fields | Ignored, **except** the explicitly forbidden `side`. |
 
-CLI: both processes accept `--robot <path>`; the dev script passes an absolute path.
+**Error-message contract.** Every failure message names the manifest path as
+supplied to the loader. Component-scoped failures additionally include the
+0-based index as `component[<i>]`. Manifest-level failures (bad version, blank
+name, wrong wheel roles) still name the path; no index is required. Messages
+need not be byte-identical between languages.
+
+### Fixture set (from `docs/DECISIONS.md`)
+
+| Accept | Reject |
+|---|---|
+| `valid-default.json` | `reject-schema-v1.json` |
+| `accept-proximity-sensor-spelling.json` | `reject-schema-float.json` |
+| `accept-sensor-without-offset.json` | `reject-side-field.json` |
+| `accept-alternative-angles.json` | `reject-duplicate-ids.json` |
+| | `reject-blank-id.json` |
+| | `reject-blank-name.json` |
+| | `reject-non-finite-angle.json` |
+| | `reject-wheel-offset-zero.json` |
+| | `reject-wheel-offset-negative.json` |
+| | `reject-two-left-wheels.json` |
+| | `reject-no-right-wheel.json` |
+| | `reject-sensor-with-offset.json` |
+
+These fixtures test manifest validation only. The D-3 check for the fixed
+`front-sensor` / `right-sensor` ids is a separate controller startup check
+(`specs/ROBOT_LAUNCH.md`) and must not be folded into these rules.
+
+CLI: both processes accept `--robot <path>`; `scripts/dev.js` and
+`scripts/runRobot.js` pass an absolute path. The sim also accepts `--world
+<path>` for obstacles and the start pose (`specs/WORLD_FORMAT.md`).
 
 ## Wire protocol — envelope unchanged `{ type, seq, simTick, payload }`
 
@@ -73,32 +112,37 @@ CLI: both processes accept `--robot <path>`; the dev script passes an absolute p
 |---|---|---|
 | `componentCommand` | robot → sim | `commands: [{ id, value }]` |
 | `componentSnapshot` | sim → robot | `readings: [{ id, value }]` |
+| `worldSnapshot` | sim → visualiser | `robot: { x, y, heading }` plus `obstacles: [...]` (see `WIRE_PROTOCOL.md` §6.2) |
 
 - `motorCommand` and `sensorSnapshot` are **removed** (breaking change).
-- Wheel `value` ∈ `[-1, 1]`, clamped by sim; mapped to the wheel's derived
-  lateral role. Persistent actuator state and safe stop are unchanged.
-- Sensor `value` = world-unit distance, or `null` when nothing is detected.
-- Unknown id / wrong type / malformed value → log and ignore.
-- `worldSnapshot` unchanged.
+- Wheel `value` ∈ `[-1, 1]`, clamped by the sim and mapped via the derived role.
+  Persistent actuator state applies; safe stop has two layers (D-2) and
+  commands are gated by connection, `seq` and `simTick` freshness (D-4).
+- Sensor `value` is a world-unit distance, or `null` for no detection (Java:
+  `Infinity`). `worldSnapshot` never carries sensor readings.
+- Unknown id / wrong component type / malformed value → log and ignore.
+- The visualiser channel remains unidirectional; no `userControl` exists.
 
 ## Component APIs (summary)
 
 | Layer | Type | Shape |
 |---|---|---|
 | `oobot.robot.student` | `Component` | `String id()` |
-| | `Wheel extends Component` | `double angle()` (mount angle, radians, 0 = forward, + = CCW), `clockwise()`, `antiClockwise()`, `stop()` |
-| | `ProximitySensor extends Component` | `long latestSimTick()`, `double distance()` (`Sensors.java` deleted) |
+| | `Wheel extends Component` | `double angle()` (radians; `sin > 0.9` left, `< -0.9` right), `clockwise()`, `antiClockwise()`, `stop()` |
+| | `ProximitySensor extends Component` | `long latestSimTick()` (staleness detection), `double distance()` (`Infinity` when nothing detected) — static `Sensors` deleted |
+| | `Mover` | `forward()`, `backward()`, `turnRight()`, `turnLeft()`, `stop()` |
+| | `Brain` | `mover()`, `frontSensor()` (fixed id `front-sensor`), `rightSensor()` (fixed id `right-sensor`), `setBehaviour(...)`, `tick()` (D-3) |
 | `oobot.robot.description` | `ComponentType` | `WHEEL`, `PROXIMITY_SENSOR` |
-| | `ComponentDescription` | `(String id, ComponentType type, double angle, double offset)` (`offset` default `0.25`; `WheelSide` deleted) |
-| | `RobotDescription` | `(String name, List<ComponentDescription> components)`, `static load(Path)` via Jackson + validation (v2 only) |
-| | `ComponentRegistry` | `bind(id, Component)` (once at startup, no locking), `component(id)`, `wheel(id)`, `sensor(id)`, `wheels()` (angle-sorted bound `Wheel` handles), `all()` |
+| | `ComponentDescription` | `(String id, ComponentType type, double angle, double offset)` (wheel offset default `0.25`; `WheelSide` deleted) |
+| | `RobotDescription` | `(String name, List<ComponentDescription> components)`, `static load(Path)` via Jackson + v2 validation |
+| | `ComponentRegistry` | `bind(id, Component)`, `component(id)` (nullable), `wheel(id)`, `sensor(id)`, `wheels()` (angle-sorted bound handles), `all()` |
 | `oobot.robot.bridge` | `RobotPlatform` | `components()`, `run(Brain)`, `stop()` (extends `AutoCloseable`) |
-| `oobot.robot.transport` | records | `ComponentValue(id, value)`, `ComponentReading(id, Double value)`, `ComponentCommandPayload(commands)`, `ComponentSnapshotPayload(readings)`, `ComponentCommandMessage(seq, simTick, payload)`, `ComponentSnapshotMessage(seq, simTick, payload)` |
-| `oobot.robot.transport` | `Json` | `writeComponentCommand(seq, simTick, commands)`; `parseMessage` handles both new types; delete `MotorCommandMessage`, `SensorSnapshotMessage`, `MotorPayload`, `SensorPayload` |
-| `oobot.robot.bridge.sim` | — | `SimWheel(robot, id, angle)`, `SimProximitySensor(robot, id)` (`update(tick, value)`, null → +∞), `SimRobot(host, port, description)` (`setWheelValue` clamps, `wheelChanged` batches; binds every handle into its registry) |
-| server `robotDescription.ts` | — | `ComponentType`, `ComponentDescription { id, type, angle, offset }`, `RobotDescription`, `loadRobotDescription(path)`, `ComponentRegistry` (`get`, `wheels`, `sensors`, `wheelPair()`, `trackWidth()`) |
-| server `types.ts` | — | `ComponentValue`, `ComponentReading`, `ComponentCommandPayload`, `ComponentSnapshotPayload` |
-| server `sim.ts` | — | per sensor: `nearestHit(heading + angle)` from robot centre; `WorldConfig.trackWidth` overridden from manifest; no physics changes |
+| `oobot.robot.transport` | records | `ComponentValue`, `ComponentReading`, `ComponentCommandPayload`, `ComponentSnapshotPayload`, `ComponentCommandMessage`, `ComponentSnapshotMessage`; sealed `WireMessage` |
+| `oobot.robot.transport` | `Json` | `writeComponentCommand(seq, simTick, commands)`; `parseMessage` handles both current message types; unknown payload fields tolerated; old message records deleted |
+| `oobot.robot.bridge.sim` | — | `SimWheel(robot, id, angle)` (local state, `wheelChanged()`), `SimProximitySensor(id)` (`update(tick, value)`, null → `Infinity`, 30-tick staleness policy), `SimRobot(host, port, description)` (binds handles, batches one command per tick, two-layer safe stop) |
+| server `robotDescription.ts` | — | `ComponentType`, `ComponentDescription`, `RobotDescription`, `loadRobotDescription(path)`, `ComponentRegistry` (`get`, `wheels`, `sensors`, `wheelPair()`, `trackWidth()`) |
+| server `types.ts` | — | `ComponentValue`, `ComponentReading`, `ComponentCommandPayload`, `ComponentSnapshotPayload`, `Obstacle`, `WorldSnapshotPayload` |
+| server `sim.ts` | — | one `nearestHit(heading + angle)` per sensor from the robot centre; track width overridden from the manifest; D-4 command gating; D-2 layer A |
 
 Left/right are derived, not declared: `sin(angle) > 0.9` → left,
-`sin(angle) < -0.9` → right (`WheelSide` deleted in both Java and TS).
+`sin(angle) < -0.9` → right (`WheelSide` deleted in both Java and TypeScript).

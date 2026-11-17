@@ -35,7 +35,8 @@ From `robot-framework/`:
 ```
 
 This produces `robot-framework/robot.jar` — a self-contained fat JAR with all
-dependencies embedded. No extra classpath flags needed.
+dependencies embedded. No extra classpath flags needed. It is a local build
+output (gitignored, not committed).
 
 From the repo root:
 
@@ -64,11 +65,14 @@ Options (all have defaults):
 | `--host` | `localhost` | Sim server host |
 | `--port` | `8080` | Sim robot-channel port |
 | `--behaviour` | `wall-follow-right` | `square`, `wall-avoid`, `wall-follow-right`, `circle`, `heart`, `brownian` |
-| `--robot` | `robots/default.json` | Path to a component manifest; `npm run dev` passes an absolute path |
+| `--robot` | `../robots/default.json` (resolved against the JAR's parent, i.e. `robot-framework/`) | Path to a component manifest; `npm run dev` / `npm run dev:robot` pass an absolute path |
 | `--help` | — | Show usage |
 | `--version` | — | Show version |
 
-Invalid arguments exit with code 2 and print usage.
+Invalid arguments exit with code 2 and print usage. The default behaviour is
+`wall-follow-right`; `--behaviour brownian` selects the `BrownianMotionBehaviour`
+from the student package. From the repo root, `npm run dev:robot` starts the JAR
+with an absolute `--robot` path so it works from any CWD.
 
 ## Logging
 
@@ -99,7 +103,7 @@ interface Component {
 }
 
 interface Wheel extends Component {
-    double angle();           // mount angle (rad): 0 = forward, + = CCW; left if sin > 0, right if sin < 0
+    double angle();           // mount angle (rad): 0 = forward, + = CCW; left if sin > 0.9, right if sin < -0.9
     void clockwise();
     void antiClockwise();
     void stop();
@@ -132,9 +136,19 @@ interface Brain {          // student writes DI/wiring implementation
 }
 ```
 
+**Fixed sensor ids (D-3).** The component model is id-addressed, but the two
+`Brain` accessors are *not* generic: `frontSensor()` must resolve the manifest
+id `front-sensor` and `rightSensor()` must resolve `right-sensor`. Startup fails
+with a usage-style error (exit code 2) naming the missing id and manifest path
+if either is absent. Other sensors may be declared in the manifest but cannot be
+addressed through this API. `ProximitySensor.latestSimTick()` lets behaviour code
+detect stale readings (the bridge treats a reading older than 30 sim ticks as
+stale).
+
 Robot code implements `RobotBehaviour`, uses the `Mover` and sensors exposed by
 its `Brain` and commands movement via `Wheel`s or the `Mover` abstraction. The
-behaviour loop (`oobot.robot.core.BehaviourLoop`) calls `Brain.tick()` at ~20 Hz.
+behaviour loop (`oobot.robot.core.BehaviourLoop`) calls `Brain.tick()` at ~20 Hz,
+then flushes all wheel changes as one batched `componentCommand` frame.
 The reference `WheeledMover` is constructed from the full wheel list
 (`WheeledMover(List<Wheel>)`) and derives left/right roles from each wheel's
 `angle()`; `RobotController` obtains that list from `ComponentRegistry.wheels()`
@@ -204,8 +218,28 @@ now id-addressed:
 
 ## Framework behaviour notes
 
-- WebSocket reconnects automatically with a fixed 2000ms delay when the socket closes.
-- On WebSocket close: motors are safe-stopped (zero speed sent before reconnect).
-- Malformed JSON is logged and ignored (never crashes).
+- WebSocket reconnects automatically with a fixed 2000 ms delay when the socket closes.
+- **Two-layer safe stop (D-2).** The Java bridge writes one `componentCommand`
+  with *every* bound wheel id at `0.0` before closing or reconnecting the socket;
+  the sim independently zeroes motors when the active robot socket closes. Each
+  layer works on its own (e.g. if the Java process dies).
+- Wheel changes are buffered locally and flushed as one `componentCommand` per
+  behaviour tick; `seq` restarts at 0 on every new connection. Sensor readings
+  are invalidated on close, reconnect and sim-tick rollback.
+- Malformed JSON is logged and ignored (never crashes); serialisation failures
+  throw rather than emitting an empty frame.
 - Behaviour exceptions are caught and logged — a misbehaving behaviour never kills the loop.
-- No heartbeat/timeout (deferred beyond MVP); safe-stop relies on WebSocket close.
+- No heartbeat/timeout (deferred beyond MVP).
+
+## Tests
+
+```bash
+./gradlew test
+```
+
+JUnit 5 unit tests cover JSON round-trips, manifest validation against
+byte-identical fixtures in `src/test/resources/fixtures/`, the connection
+close/safe-stop contract (fake WebSocket), batching and reconnect state.
+`./gradlew clean fatJar` builds the fat JAR from scratch; `./gradlew test fatJar`
+runs both. CLI `--help`, `--version` and a live end-to-end run against the sim
+remain manual/ad-hoc checks.

@@ -2,49 +2,104 @@
 
 Object Oriented Robotics — MVP
 
-**Status:** accepted (see `DESIGN_REVIEW.md` items 6.1, 7.2 and `ARCHITECTURE.md` §Robot controller / Launch and configuration).
+**Status:** current. Describes the picocli-based `RobotController` entry point
+(`robot-framework/src/main/java/oobot/robot/RobotController.java`),
+`specs/COMPONENTS.md` and `docs/DECISIONS.md` D-2/D-3.
 
 ## Purpose
 
-Defines how the Java robot controller process is started and how it connects to the sim's robot channel.
+Defines how the Java robot controller process is launched, validated and wired
+to the sim's robot channel.
 
 ## Launch command
 
+From the `robot-framework/` directory (after `npm run build:robot` has produced
+`robot.jar`):
+
 ```bash
-java -jar robot.jar --host localhost --port ROBOT_PORT
+java -jar robot.jar --host localhost --port 8080 \
+  --robot ../robots/default.json --behaviour wall-follow-right
 ```
+
+From the repo root, the recommended command is `npm run dev:robot`;
+`scripts/runRobot.js` starts the same JAR with an **absolute** `--robot` path
+derived from its own location, so it works from any working directory. To run a
+different behaviour, add e.g. `--behaviour brownian` (extra args are forwarded
+after the script's own `--robot` argument).
 
 ## Arguments
 
 | Argument | Default | Meaning |
-|----------|---------|---------|
-| `--host` | `localhost` | Sim host (hardcoded to localhost for MVP; no discovery). |
-| `--port` | `8080` | Robot channel WebSocket port (`ROBOT_PORT`). |
+|---|---|---|
+| `--host` | `localhost` | Sim host (no discovery). |
+| `--port` | `8080` | Robot channel port (`ROBOT_PORT` on the sim). |
+| `--robot` | `../robots/default.json` | v2 component manifest. The default is resolved relative to the framework directory (normally `robot-framework/`, the JAR's parent) so standalone launches work from any CWD; an explicit path is used as given (resolved to absolute). |
+| `--behaviour` | `wall-follow-right` | One of `square`, `wall-avoid`, `wall-follow-right`, `circle`, `heart`, `brownian`. |
+| `--help`, `--version` | — | Provided by picocli `mixinStandardHelpOptions`. |
 
-## Defaults
+The sim mirrors `--robot` and also accepts `--world <path>`; its ports come
+from `ROBOT_PORT` / `VISUALISER_PORT` (integers 1–65535). `scripts/dev.js`
+validates `ROBOT_PORT`, probes `127.0.0.1` on it, then starts the visualiser and
+the robot with an explicit host, port, behaviour and manifest path.
 
-- Host: `localhost`
-- Port: `8080`
+## Startup validation
 
-These match the sim server defaults (`ROBOT_PORT=8080`, `VISUALISER_PORT=8081` in `simulator/server/src/index.ts`).
+All validation happens before any socket is opened or thread started. Failures
+are wrapped in `CommandLine.ParameterException`, so picocli prints usage and
+the process exits with code **2** — no stack trace and no half-started robot.
+
+1. The behaviour name must be in the six-value set above.
+2. The manifest must be a regular file; a missing default names the resolved
+   path and explains `--robot`.
+3. `RobotDescription.load(Path)` must accept the v2 manifest (same rules as
+   the TypeScript loader; see `specs/ROBOT_DESCRIPTION.md`).
+4. The manifest must declare `proximitySensor` components with ids
+   `front-sensor` and `right-sensor` (D-3). A missing id produces an error
+   naming the id, the accessor that needs it and the manifest path.
 
 ## Behaviour
 
-On startup the controller:
+On a valid launch the controller:
 
-1. Parses `--host` and `--port` from the command line.
-2. Instantiates the configured `RobotBehaviour` (default: `SquareTraceBehaviour`).
-3. Starts the `Framework`, which:
-   - Connects to `ws://<host>:<port>` (robot channel) via a hand-rolled WebSocket client.
-   - Invokes `RobotBehaviour.init()` once, then `RobotBehaviour.update()` on a ~20 Hz behaviour loop.
-   - Sends `motorCommand` NDJSON messages as `Motor.setSpeed(...)` is called.
-   - Parses incoming `sensorSnapshot` NDJSON messages (empty payload in iteration 1).
-4. On WebSocket close (robot disconnects or sim shuts down): best-effort zero-speed command is sent; the sim performs the actual motor stopping.
-5. On process shutdown (SIGINT/SIGTERM): shuts down the behaviour loop and closes the WebSocket.
+1. Loads the manifest and creates `SimRobot(host, port, description)`, which
+   binds `SimWheel` / `SimProximitySensor` handles by id into a
+   `ComponentRegistry` and starts its reconnect thread.
+2. Builds `WheeledMover` from `ComponentRegistry.wheels()` (sorted by mount
+   angle; left/right derived from `sin(angle)`), resolves the two fixed-id
+   sensors, creates the selected behaviour and wraps them in `DefaultBrain`.
+3. Registers a JVM shutdown hook that calls `platform.stop()`, then starts a
+   `BehaviourLoop` that calls `Brain.tick()` every 50 ms (~20 Hz). Each tick is
+   followed by `SimRobot.flushCommands()`.
+4. Connects with OkHttp via `WsConnection` to `ws://<host>:<port>`. Inbound
+   NDJSON is buffered across frames; malformed lines are ignored; inbound
+   `componentCommand` messages are explicitly discarded. On each open the seq
+   counter restarts at 0 and sensor state is invalidated.
+5. Batches all wheel values changed during a tick into **one**
+   `componentCommand` frame with the last seen `simTick` (J2.1). The sim gates
+   these frames by channel/connection, `seq` and `simTick` freshness (D-4,
+   `WIRE_PROTOCOL.md` §5.1).
+6. Updates sensor handles from `componentSnapshot.readings`; a tick rollback
+   starts a fresh session with `distance() == Infinity` and `latestSimTick() == 0`.
+7. Reconnects after ~2 s when the socket closes, unless stopped.
 
-## Out of scope for MVP
+## Safe stop (D-2)
 
-- Config file; environment variables as an alternative to CLI args.
-- Discovery service (the robot is told the sim's host/port explicitly).
-- Automatic port selection / finding a free port.
-- Multiple robots / per-robot launch configuration.
+On every orderly disconnect, shutdown or reconnect the bridge:
+
+1. stops the behaviour tick;
+2. writes one `componentCommand` containing **every** bound wheel id with
+   `value: 0.0`, using the next unused seq and the last seen `simTick`;
+3. writes/flushes it while `WsConnection.isOpen()` is still true
+   (`closeWithFinalFrame`), then clears `open` and calls `close()`;
+4. only then schedules any reconnect.
+
+If the socket is already dead this is best-effort. Independently, the sim zeros
+its actuators when the active robot socket closes and on shutdown (layer A).
+There is no heartbeat/timeout for hung-but-connected processes.
+
+## Out of scope
+
+- Config files or environment variables as an alternative to the robot's CLI
+  arguments (the dev script reads `ROBOT_PORT` only to forward it as `--port`).
+- Discovery, automatic port selection, multiple robots, per-robot launch
+  profiles, untrusted/user-uploaded behaviours.

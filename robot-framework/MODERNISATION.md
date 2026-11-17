@@ -7,6 +7,8 @@ by building the fat JAR and running a smoke test before moving on.
 - `[ ]` not started
 - `[~]` in progress
 - `[x]` done & verified
+- `[test]` covered by an automated test or build check (W0/W1/W2)
+- `[manual]` verified only by manual/ad-hoc smoke test — no automated test
 
 ## Steps
 
@@ -30,20 +32,20 @@ by building the fat JAR and running a smoke test before moving on.
 
 - 2026-11-17: Initial document created. Starting Step 1.
 - 2026-11-17: Step 1 done — Gradle wrapper + fat JAR task (`./gradlew fatJar` → `robot.jar`).
-- 2026-11-17: Step 2 done — Jackson replaces hand-rolled JSON parser; typed sealed records (`WireMessage`, `SensorSnapshotMessage`, `MotorPayload`, etc.); `Envelope.java` removed. Verified wire format unchanged and deserialisation works.
-- 2026-11-17: Step 3 done — OkHttp replaces hand-rolled RFC 6455 client. Verified end-to-end with mock WS server: connect, motorCommand send, sensorSnapshot receive with simTick parsing, disconnect.
+- 2026-11-17: Step 2 done — Jackson replaces hand-rolled JSON parser; typed sealed records (`WireMessage`, `ComponentCommandMessage`, `ComponentSnapshotMessage`, `ComponentCommandPayload`, `ComponentSnapshotPayload`, `ComponentValue`, `ComponentReading`); `Envelope.java` removed. Verified wire format unchanged and deserialisation works.
+- 2026-11-17: Step 3 done — OkHttp replaces hand-rolled RFC 6455 client. Verified end-to-end with mock WS server: connect, `componentCommand` send, `componentSnapshot` receive with simTick parsing, disconnect.
 - 2026-11-17: Step 4 done — SLF4J + Logback replaces all 26 `System.out`/`err` calls across 10 files. Added `logback.xml` with timestamped pattern and `LOG_LEVEL` env override. Per-tick logs are DEBUG (hidden by default).
 - 2026-11-17: Step 5 done — picocli replaces hand-rolled arg parsing. `--help`, `--version`, type coercion, and validation all work; invalid input exits 2 with usage output.
-- 2026-11-17: All steps complete. Final verification: clean Gradle build, 6.4 MB fat JAR with all deps embedded, full integration test with real sim server (149 motorCommands received, safe-stop on disconnect). Docs updated: `README.md`, `AGENTS.md`, `PLAN_SENSORS.md`, `robot-framework/README.md`, `package.json`.
+- 2026-11-17: All steps complete. Final verification: clean Gradle build, 6.4 MB fat JAR with all deps embedded, full integration smoke test with real sim server (149 `componentCommand`s received, safe-stop on disconnect). Docs updated: `README.md`, `AGENTS.md`, `PLAN_SENSORS.md` (now `docs/archive/`), `robot-framework/README.md`, `package.json`.
 
 ## Verification checklist
 
-- [x] `./gradlew clean fatJar` produces `robot.jar` from scratch
-- [x] `java -jar robot.jar --help` shows usage
-- [x] `java -jar robot.jar --version` prints version
-- [x] Invalid args exit 2 with usage
-- [x] motorCommand wire format unchanged (Jackson polymorphic types)
-- [x] sensorSnapshot deserialisation works (typed records)
-- [x] OkHttp connects, sends, receives, reconnects, closes cleanly
-- [x] Structured logs with timestamps and levels
-- [x] Full integration: robot connects to real sim, 149 commands received, safe-stop on disconnect
+- [x] [test] `./gradlew clean fatJar` produces `robot.jar` from scratch
+- [x] [manual] `java -jar robot.jar --help` shows usage
+- [x] [manual] `java -jar robot.jar --version` prints version
+- [x] [test] Invalid args exit 2 with usage (picocli `ParameterException` path, J1.3 startup validation)
+- [x] [test] `componentCommand` wire format unchanged (Jackson polymorphic types; `JsonTest`)
+- [x] [test] `componentSnapshot` deserialisation works (typed records; `JsonTest`)
+- [x] [manual] OkHttp connects, sends, receives, reconnects and closes cleanly end-to-end (fake-WebSocket unit tests cover zero-before-close and batching; no live-WS test)
+- [x] [manual] Structured logs with timestamps and levels
+- [x] [manual] Full integration: robot connects to real sim, 149 `componentCommand`s received, safe-stop on disconnect
