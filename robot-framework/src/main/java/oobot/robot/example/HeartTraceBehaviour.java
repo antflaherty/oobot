@@ -24,8 +24,10 @@ import oobot.robot.student.ProximitySensor;
  * (~4.5 deg per turn tick at full differential). Only {@link Mover} commands
  * are used — no motor power values leak into behaviour code.
  * <p>
- * Reads {@code sensorSnapshot} each tick (ignored in iteration 1 - no sensors)
- * to exercise the sensor path.
+ * Reads the fixed-id {@link ProximitySensor} exposed by
+ * {@link oobot.robot.student.Brain} each tick (backed by {@code componentSnapshot})
+ * to exercise the sensor path; the reading is a staleness placeholder
+ * ({@link ProximitySensor#latestSimTick()}) and does not influence movement.
  */
 public class HeartTraceBehaviour implements RobotBehaviour {
     private static final Logger log = LoggerFactory.getLogger(HeartTraceBehaviour.class);
@@ -110,7 +112,7 @@ public class HeartTraceBehaviour implements RobotBehaviour {
 
     @Override
     public void update() {
-        // Exercise the sensor path (reads latest sensorSnapshot); ignored in iteration 1.
+        // Exercise the sensor path: front (Brain.frontSensor()) latestSimTick() is a staleness placeholder.
         long ignoredTick = front.latestSimTick();
 
         Seg seg = path[segIdx];

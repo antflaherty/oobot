@@ -18,8 +18,10 @@ import java.util.Random;
  * This produces an unpredictable, wandering path — classic brownian motion.
  * <p>
  * Commands {@link Mover} only: no motor power values or wheel mounting is
- * visible to this class. Reads {@code sensorSnapshot} each tick to exercise
- * the sensor path (ignored for movement decisions in iteration 1).
+ * visible to this class. Reads the fixed-id {@link ProximitySensor} exposed by
+ * {@link Brain} each tick (backed by {@code componentSnapshot}) to exercise the
+ * sensor path; the reading is a staleness placeholder
+ * ({@link ProximitySensor#latestSimTick()}), ignored for movement decisions.
  */
 public class BrownianMotionBehaviour implements RobotBehaviour {
     private static final Logger log = LoggerFactory.getLogger(BrownianMotionBehaviour.class);
@@ -53,7 +55,7 @@ public class BrownianMotionBehaviour implements RobotBehaviour {
 
     @Override
     public void update() {
-        // Exercise the sensor path (reads latest sensorSnapshot); ignored for movement in iteration 1.
+        // Exercise the sensor path: front (Brain.frontSensor()) latestSimTick() is a staleness placeholder.
         long ignoredTick = front.latestSimTick();
 
         if (ticksRemaining-- <= 0) {

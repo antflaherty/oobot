@@ -21,8 +21,10 @@ import oobot.robot.student.ProximitySensor;
  * implementation handles the per-wheel translation. This is the decoupling
  * boundary in action.
  * <p>
- * Reads {@code sensorSnapshot} each tick (ignored in iteration 1 - no sensors)
- * to exercise the sensor path.
+ * Reads the fixed-id {@link ProximitySensor} exposed by
+ * {@link oobot.robot.student.Brain} each tick (backed by {@code componentSnapshot})
+ * to exercise the sensor path; the reading is a staleness placeholder
+ * ({@link ProximitySensor#latestSimTick()}) and does not influence movement.
  */
 public class CircleTraceBehaviour implements RobotBehaviour {
     private static final Logger log = LoggerFactory.getLogger(CircleTraceBehaviour.class);
@@ -51,7 +53,7 @@ public class CircleTraceBehaviour implements RobotBehaviour {
 
     @Override
     public void update() {
-        // Exercise the sensor path (reads latest sensorSnapshot); ignored in iteration 1.
+        // Exercise the sensor path: front (Brain.frontSensor()) latestSimTick() is a staleness placeholder.
         long ignoredTick = front.latestSimTick();
 
         switch (state) {

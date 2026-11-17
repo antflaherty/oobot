@@ -12,8 +12,10 @@ import oobot.robot.student.ProximitySensor;
  * <p>
  * State machine: {@code FORWARD -> TURN_RIGHT -> FORWARD -> ...}. Each state
  * lasts a fixed number of behaviour update ticks (~1 second at 20 Hz). Reads
- * {@code sensorSnapshot} each tick (ignored in iteration 1 - no sensors) to
- * exercise the sensor path.
+ * the fixed-id {@link ProximitySensor} exposed by
+ * {@link oobot.robot.student.Brain} each tick (backed by {@code componentSnapshot})
+ * to exercise the sensor path; the reading is a staleness placeholder
+ * ({@link ProximitySensor#latestSimTick()}) and does not influence movement.
  * <p>
  * Commands {@link Mover} only: {@code forward()} on FORWARD ticks,
  * {@code turnRight()} on TURN ticks. No motor power values are visible to
@@ -47,7 +49,7 @@ public class SquareTraceBehaviour implements RobotBehaviour {
 
     @Override
     public void update() {
-        // Exercise the sensor path (reads latest sensorSnapshot); ignored in iteration 1.
+        // Exercise the sensor path: front (Brain.frontSensor()) latestSimTick() is a staleness placeholder.
         long ignoredTick = front.latestSimTick();
 
         switch (state) {
