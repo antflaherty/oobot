@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.Sensors;
+import oobot.robot.student.ProximitySensor;
 
 /**
  * Example robot behaviour: square trace.
@@ -30,11 +30,13 @@ public class SquareTraceBehaviour implements RobotBehaviour {
     private static final int TICKS_PER_STATE = 20; // ~1 second at 20 Hz
 
     private final Mover mover;
-    private final Sensors sensors;
+    private final ProximitySensor front;
+    private final ProximitySensor right;
 
-    public SquareTraceBehaviour(Mover mover, Sensors sensors) {
+    public SquareTraceBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
         this.mover = mover;
-        this.sensors = sensors;
+        this.front = front;
+        this.right = right;
     }
 
     @Override
@@ -46,7 +48,7 @@ public class SquareTraceBehaviour implements RobotBehaviour {
     @Override
     public void update() {
         // Exercise the sensor path (reads latest sensorSnapshot); ignored in iteration 1.
-        long ignoredTick = sensors.latestSimTick();
+        long ignoredTick = front.latestSimTick();
 
         switch (state) {
             case FORWARD:

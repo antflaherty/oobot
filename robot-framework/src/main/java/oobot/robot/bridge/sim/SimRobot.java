@@ -1,19 +1,26 @@
 package oobot.robot.bridge.sim;
 
+import oobot.robot.bridge.RobotPlatform;
+import oobot.robot.description.ComponentDescription;
+import oobot.robot.description.ComponentRegistry;
+import oobot.robot.description.RobotDescription;
 import oobot.robot.student.Brain;
-import oobot.robot.student.Sensors;
-import oobot.robot.student.Wheel;
 import oobot.robot.core.BehaviourLoop;
+import oobot.robot.transport.ComponentReading;
+import oobot.robot.transport.ComponentSnapshotMessage;
+import oobot.robot.transport.ComponentValue;
 import oobot.robot.transport.Json;
 import oobot.robot.transport.WireMessage;
-import oobot.robot.transport.SensorSnapshotMessage;
-import oobot.robot.transport.SensorPayload;
 import oobot.robot.transport.WsConnection;
 import oobot.robot.transport.WsListener;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -25,22 +32,22 @@ import java.util.concurrent.atomic.AtomicLong;
  * <ul>
  *   <li>Connect to {@code ws://host:port} on the robot channel; reconnect with
  *       a fixed delay when the socket closes (hidden from robot code).</li>
- *   <li>Create the sim-backed hardware: {@link SimWheel} (left/right),
- *       {@link SimSensors}.</li>
- *   <li>Expose that hardware via {@link #leftWheel()}, {@link #rightWheel()},
- *       and {@link #sensors()} so the student can build a {@link Brain} with a
- *       robot-side {@link oobot.robot.example.WheeledMover}.</li>
- *   <li>Translate wheel direction changes into {@code motorCommand} NDJSON
- *       messages over the WebSocket.</li>
- *   <li>Parse incoming {@code sensorSnapshot} messages into {@link SimSensors}.</li>
- *   <li>On WebSocket close: safe-stop the motors.</li>
+ *   <li>Create sim-backed hardware handles from the supplied
+ *       {@link RobotDescription} and bind them into a {@link ComponentRegistry}.</li>
+ *   <li>Expose that registry via {@link #components()} so a {@link Brain} can
+ *       be built against id-addressed components.</li>
+ *   <li>Translate wheel value changes into one batched {@code componentCommand}
+ *       NDJSON message over the WebSocket.</li>
+ *   <li>Parse incoming {@code componentSnapshot} messages and update the bound
+ *       proximity sensor handles; unknown ids are ignored.</li>
+ *   <li>On WebSocket close: safe-stop every wheel.</li>
  * </ul>
  * <p>
  * This is the layer that would be swapped for {@code bridge.hardware} when
  * controlling real hardware. The student-facing API and behaviour loop never
  * change.
  */
-public class SimRobot {
+public class SimRobot implements RobotPlatform {
     private static final Logger log = LoggerFactory.getLogger(SimRobot.class);
     private static final long RECONNECT_DELAY_MS = 2000;
 
@@ -48,9 +55,8 @@ public class SimRobot {
     private final int port;
     private final AtomicLong seq = new AtomicLong(0);
 
-    private final SimWheel leftWheel;
-    private final SimWheel rightWheel;
-    private final SimSensors sensors;
+    private final ComponentRegistry registry;
+    private final Map<String, SimProximitySensor> sensorsById = new LinkedHashMap<>();
 
     private final Object connectionLock = new Object();
     private final Object closeLock = new Object();
@@ -58,32 +64,37 @@ public class SimRobot {
     private volatile BehaviourLoop loop;
     private volatile boolean running = true;
 
-    // Persistent actuator state: latest per-wheel speed in [-1, 1].
-    private volatile double leftWheelSpeed = 0.0;
-    private volatile double rightWheelSpeed = 0.0;
+    // Persistent actuator state: latest per-wheel value in [-1, 1].
+    private final Map<String, Double> wheelValues = new LinkedHashMap<>();
+    private volatile long latestSimTick = 0L;
 
-    public SimRobot(String host, int port) {
+    public SimRobot(String host, int port, RobotDescription description) {
         this.host = host;
         this.port = port;
-        this.leftWheel = new SimWheel(this, true);
-        this.rightWheel = new SimWheel(this, false);
-        this.sensors = new SimSensors(this);
+        this.registry = new ComponentRegistry(description);
+
+        for (ComponentDescription component : description.components()) {
+            switch (component.type()) {
+                case WHEEL -> {
+                    SimWheel wheel = new SimWheel(this, component.id(), component.angle());
+                    synchronized (wheelValues) {
+                        wheelValues.put(component.id(), 0.0);
+                    }
+                    registry.bind(component.id(), wheel);
+                }
+                case PROXIMITY_SENSOR -> {
+                    SimProximitySensor sensor = new SimProximitySensor(this, component.id());
+                    sensorsById.put(component.id(), sensor);
+                    registry.bind(component.id(), sensor);
+                }
+            }
+        }
         startReconnectThread();
     }
 
-    /** Left wheel. */
-    public Wheel leftWheel() {
-        return leftWheel;
-    }
-
-    /** Right wheel. */
-    public Wheel rightWheel() {
-        return rightWheel;
-    }
-
-    /** Proximity sensor readings (front, right). */
-    public Sensors sensors() {
-        return sensors;
+    @Override
+    public ComponentRegistry components() {
+        return registry;
     }
 
     public boolean isRunning() {
@@ -94,12 +105,14 @@ public class SimRobot {
      * Start the behaviour loop driving the given brain (~20 Hz, calling
      * {@link Brain#tick()} each tick). Non-blocking.
      */
+    @Override
     public void run(Brain brain) {
         loop = new BehaviourLoop(() -> brain.tick());
         loop.start();
     }
 
     /** Stop the behaviour loop and close the WebSocket connection. */
+    @Override
     public void stop() {
         running = false;
         synchronized (closeLock) {
@@ -114,19 +127,26 @@ public class SimRobot {
         }
     }
 
-    /* ---------------- wheel -> motorCommand ---------------- */
+    /** {@link AutoCloseable} alias for {@link #stop()}. */
+    @Override
+    public void close() {
+        stop();
+    }
 
-    /** Called by a wheel when its direction changes — sends the combined motorCommand. */
+    /* ---------------- wheel -> componentCommand ---------------- */
+
+    /** Called by a wheel when its value changes — stores the clamped value. */
+    void setWheelValue(String id, double value) {
+        synchronized (wheelValues) {
+            if (wheelValues.containsKey(id)) {
+                wheelValues.put(id, clamp(value));
+            }
+        }
+    }
+
+    /** Called by a wheel when its value changes — sends one batched componentCommand. */
     void wheelChanged() {
-        sendMotorCommand();
-    }
-
-    void setLeftSpeed(double speed) {
-        leftWheelSpeed = clamp(speed);
-    }
-
-    void setRightSpeed(double speed) {
-        rightWheelSpeed = clamp(speed);
+        sendComponentCommand();
     }
 
     private static double clamp(double s) {
@@ -136,24 +156,35 @@ public class SimRobot {
         return s;
     }
 
-    private void sendMotorCommand() {
+    private void sendComponentCommand() {
+        List<ComponentValue> commands = new ArrayList<>();
+        synchronized (wheelValues) {
+            for (Map.Entry<String, Double> entry : wheelValues.entrySet()) {
+                commands.add(new ComponentValue(entry.getKey(), entry.getValue()));
+            }
+        }
         long sequence = seq.getAndIncrement();
-        long simTick = sensors.latestSimTick();
-        String line = Json.writeMotorCommand(sequence, simTick, leftWheelSpeed, rightWheelSpeed);
+        String line = Json.writeComponentCommand(sequence, latestSimTick, commands);
         WsConnection c = connection;
         if (c != null) {
             c.sendText(line);
-            log.debug("Sent motorCommand {}", line.trim());
+            log.debug("Sent componentCommand {}", line.trim());
         } else {
-            log.debug("Not connected; dropping motorCommand {}", line.trim());
+            log.debug("Not connected; dropping componentCommand {}", line.trim());
         }
     }
 
-    /* ---------------- sim -> sensorSnapshot ---------------- */
+    /* ---------------- sim -> componentSnapshot ---------------- */
 
-    /** Called by the transport when a sensorSnapshot arrives. */
-    void onSensorSnapshot(long simTick, Double front, Double right) {
-        sensors.update(simTick, front, right);
+    /** Called by the transport when a componentSnapshot arrives. */
+    private void onComponentSnapshot(long simTick, List<ComponentReading> readings) {
+        latestSimTick = simTick;
+        for (ComponentReading reading : readings) {
+            SimProximitySensor sensor = sensorsById.get(reading.id());
+            if (sensor != null) {
+                sensor.update(simTick, reading.value());
+            }
+        }
     }
 
     /* ---------------- connection lifecycle ---------------- */
@@ -247,8 +278,12 @@ public class SimRobot {
     }
 
     private void safeStop() {
-        leftWheel.stop();
-        rightWheel.stop();
+        synchronized (wheelValues) {
+            for (String id : wheelValues.keySet()) {
+                wheelValues.put(id, 0.0);
+            }
+        }
+        wheelChanged();
         synchronized (connectionLock) {
             connection = null;
         }
@@ -259,9 +294,8 @@ public class SimRobot {
         if (msg == null) {
             return; // malformed JSON: log and ignore
         }
-        if (msg instanceof SensorSnapshotMessage snapshot) {
-            SensorPayload p = snapshot.payload();
-            onSensorSnapshot(snapshot.simTick(), p.front(), p.right());
+        if (msg instanceof ComponentSnapshotMessage snapshot) {
+            onComponentSnapshot(snapshot.simTick(), snapshot.payload().readings());
         }
     }
 

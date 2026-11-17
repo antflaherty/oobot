@@ -2,7 +2,7 @@ package oobot.robot.student;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.Sensors;
+import oobot.robot.student.ProximitySensor;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -27,7 +27,8 @@ public class BrownianMotionBehaviour implements RobotBehaviour {
     private enum Command { FORWARD, TURN_LEFT, TURN_RIGHT, STOP }
 
     private final Mover mover;
-    private final Sensors sensors;
+    private final ProximitySensor front;
+    private final ProximitySensor right;
     private final Random random;
 
     private Command command = Command.FORWARD;
@@ -36,9 +37,10 @@ public class BrownianMotionBehaviour implements RobotBehaviour {
     private static final int MIN_TICKS = 10; // ~0.5 s at 20 Hz
     private static final int MAX_TICKS = 40; // ~2 s at 20 Hz
 
-    public BrownianMotionBehaviour(Mover mover, Sensors sensors) {
+    public BrownianMotionBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
         this.mover = mover;
-        this.sensors = sensors;
+        this.front = front;
+        this.right = right;
         this.random = new Random();
     }
 
@@ -52,7 +54,7 @@ public class BrownianMotionBehaviour implements RobotBehaviour {
     @Override
     public void update() {
         // Exercise the sensor path (reads latest sensorSnapshot); ignored for movement in iteration 1.
-        long ignoredTick = sensors.latestSimTick();
+        long ignoredTick = front.latestSimTick();
 
         if (ticksRemaining-- <= 0) {
             pickNewCommand();

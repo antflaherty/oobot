@@ -41,10 +41,10 @@ export interface Transport {
 
 // Locked payload schemas (WIRE_PROTOCOL.md §6, iteration 1)
 
-export interface MotorCommandPayload {
-  left: number;  // [-1, 1]
-  right: number; // [-1, 1]
-}
+export interface ComponentValue { id: string; value: number }
+export interface ComponentReading { id: string; value: number | null }
+export interface ComponentCommandPayload { commands: ComponentValue[] }
+export interface ComponentSnapshotPayload { readings: ComponentReading[] }
 
 // Axis-aligned box obstacle (centre-based convention).
 // (x, y) is the centre; width/height are full dimensions. Box spans
@@ -59,11 +59,6 @@ export interface Obstacle {
 export interface WorldSnapshotPayload {
   robot: { x: number; y: number; heading: number }; // heading: radians, 0 = +X axis
   obstacles: Obstacle[]; // static obstacles (iteration 2)
-}
-
-export interface SensorSnapshotPayload {
-  front: number | null;  // world units to nearest hit ahead (front-facing), or null if nothing detected
-  right: number | null; // world units to nearest hit to the right (90 deg), or null if nothing detected
 }
 
 export interface RobotPose {

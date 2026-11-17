@@ -1,6 +1,7 @@
-// Ray casting for the front-mounted proximity sensor (iteration 2).
+// Ray casting for id-addressed proximity sensors (iteration 2).
 //
-// Casts a single ray from the robot's pose along its heading against the
+// Casts a single ray from the robot's pose along the sensor's mounted direction
+// (pose.heading + the component's angle) against the
 // world box edges (treated as walls per specs/SENSORS.md §9.1). Returns the
 // distance to the nearest hit, or null if nothing is detected / the result is
 // not finite.

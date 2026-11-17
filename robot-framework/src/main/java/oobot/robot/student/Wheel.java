@@ -14,7 +14,13 @@ package oobot.robot.student;
  * This is the piece students import. Behaviour code normally interacts with
  * wheels through {@link Mover} or {@link oobot.robot.student.Brain}, not directly.
  */
-public interface Wheel {
+public interface Wheel extends Component {
+    /**
+     * Mount angle in radians, 0 = forward, + = CCW; left if sin &gt; 0, right if
+     * sin &lt; 0.
+     */
+    double angle();
+
     /** Turn the wheel clockwise. */
     void clockwise();
 

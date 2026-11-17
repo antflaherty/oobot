@@ -7,6 +7,7 @@ const net = require('net');
 const path = require('path');
 
 const root = path.resolve(__dirname, '..');
+const robotManifest = path.resolve(root, 'robots', 'default.json');
 
 function waitForPort(port, host = 'localhost', interval = 500) {
   return new Promise((resolve) => {
@@ -44,7 +45,12 @@ async function main() {
   }
 
   // 1. Start the sim server first (slowest to start due to ts-node compilation)
-  const sim = spawnCmd('sim', 'npm', ['run', 'dev'], path.join(root, 'simulator/server'));
+  const sim = spawnCmd(
+    'sim',
+    'npm',
+    ['run', 'dev', '--', '--robot', robotManifest],
+    path.join(root, 'simulator/server')
+  );
 
   // 2. Wait for the sim to accept connections on the robot channel
   console.log('[dev] waiting for sim server on port 8080...');
@@ -58,7 +64,18 @@ async function main() {
   const robot = spawnCmd(
     'robot',
     'java',
-    ['-jar', 'robot-framework/robot.jar', '--host', 'localhost', '--port', '8080', '--behaviour', 'brownian'],
+    [
+      '-jar',
+      'robot-framework/robot.jar',
+      '--host',
+      'localhost',
+      '--port',
+      '8080',
+      '--behaviour',
+      'brownian',
+      '--robot',
+      robotManifest,
+    ],
     root
   );
 
@@ -76,7 +93,7 @@ async function main() {
   process.on('SIGTERM', () => shutdown('SIGTERM'));
 
   // If any child exits, shut down everything.
-  Promise.all(
+  Promise.race(
     processes.map(
       (p) =>
         new Promise((resolve) => {

@@ -17,6 +17,7 @@
 
 import { WebSocketTransport } from "./transport";
 import { SimEngine } from "./sim";
+import { loadRobotDescription } from "./robotDescription";
 import { TransportOptions, RobotPose, Obstacle } from "./types";
 import {
   loadWorldFile,
@@ -30,6 +31,16 @@ const VISUALISER_PORT = Number(process.env.VISUALISER_PORT ?? 8081);
 // Resolved relative to this file's directory so it works regardless of cwd
 // (ts-node runs src/index.ts, so go up one level to the server root).
 const DEFAULT_WORLD_FILE = path.join(__dirname, "..", "worlds", "maze.json");
+
+// --robot <path> selects the component manifest; default is robots/default.json
+// resolved from the current working directory.
+function robotDescriptionPath(): string {
+  const flagIndex = process.argv.indexOf("--robot");
+  const provided = flagIndex >= 0 ? process.argv[flagIndex + 1] : undefined;
+  return provided
+    ? path.resolve(provided)
+    : path.resolve(process.cwd(), "robots", "default.json");
+}
 
 function log(...args: unknown[]): void {
   const stamp = new Date().toISOString().slice(11, 19);
@@ -64,7 +75,11 @@ async function main(): Promise<void> {
     );
   }
 
-  const sim = new SimEngine(transport, worldConfig, startPose, obstacles);
+  const robotDescriptionPathResolved = robotDescriptionPath();
+  const robotDescription = loadRobotDescription(robotDescriptionPathResolved);
+  log(`loaded robot manifest: ${robotDescription.name} (${robotDescriptionPathResolved}) — ${robotDescription.components.length} components`);
+
+  const sim = new SimEngine(transport, robotDescription, worldConfig, startPose, obstacles);
 
   process.on("SIGINT", async () => {
     log("SIGINT received — shutting down");

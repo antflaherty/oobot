@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.Sensors;
+import oobot.robot.student.ProximitySensor;
 
 /**
  * Example robot behaviour: heart trace.
@@ -55,11 +55,13 @@ public class HeartTraceBehaviour implements RobotBehaviour {
     private State state = State.TURN;
 
     private final Mover mover;
-    private final Sensors sensors;
+    private final ProximitySensor front;
+    private final ProximitySensor right;
 
-    public HeartTraceBehaviour(Mover mover, Sensors sensors) {
+    public HeartTraceBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
         this.mover = mover;
-        this.sensors = sensors;
+        this.front = front;
+        this.right = right;
         this.path = buildPath();
     }
 
@@ -109,7 +111,7 @@ public class HeartTraceBehaviour implements RobotBehaviour {
     @Override
     public void update() {
         // Exercise the sensor path (reads latest sensorSnapshot); ignored in iteration 1.
-        long ignoredTick = sensors.latestSimTick();
+        long ignoredTick = front.latestSimTick();
 
         Seg seg = path[segIdx];
 

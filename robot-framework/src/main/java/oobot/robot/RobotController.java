@@ -8,7 +8,10 @@ import picocli.CommandLine.Option;
 import picocli.CommandLine.Model.CommandSpec;
 import picocli.CommandLine.Spec;
 
+import oobot.robot.bridge.RobotPlatform;
 import oobot.robot.bridge.sim.SimRobot;
+import oobot.robot.description.ComponentRegistry;
+import oobot.robot.description.RobotDescription;
 import oobot.robot.example.CircleTraceBehaviour;
 import oobot.robot.example.DefaultBrain;
 import oobot.robot.example.HeartTraceBehaviour;
@@ -19,15 +22,17 @@ import oobot.robot.example.WheeledMover;
 import oobot.robot.student.Brain;
 import oobot.robot.student.BrownianMotionBehaviour;
 import oobot.robot.student.Mover;
+import oobot.robot.student.ProximitySensor;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.Sensors;
 
+import java.nio.file.Path;
 import java.util.Set;
 
 /**
  * Entry point for the robot controller process.
  *
  * <p>Usage: {@code java -jar robot.jar [--host localhost] [--port 8080]
+ * [--robot ../robots/default.json]
  * [--behaviour square|wall-avoid|wall-follow-right|circle|heart|brownian]}
  */
 @Command(name = "robot", version = "oobot robot-controller 1.0.0",
@@ -53,6 +58,10 @@ public class RobotController implements Runnable {
             description = "Behaviour: square|wall-avoid|wall-follow-right|circle|heart|brownian (default: ${DEFAULT-VALUE})")
     private String behaviourName;
 
+    @Option(names = "--robot", defaultValue = "../robots/default.json",
+            description = "Robot component manifest path (default: ${DEFAULT-VALUE})")
+    private Path robotPath;
+
     public static void main(String[] args) {
         int exitCode = new CommandLine(new RobotController()).execute(args);
         System.exit(exitCode);
@@ -68,23 +77,27 @@ public class RobotController implements Runnable {
 
         log.info("Starting; connecting to ws://{}:{}", host, port);
 
-        SimRobot robot = new SimRobot(host, port);
+        RobotDescription desc = RobotDescription.load(robotPath);
+        log.info("Loaded robot manifest {} ({} components)", robotPath, desc.components().size());
+        RobotPlatform platform = new SimRobot(host, port, desc);
+        ComponentRegistry reg = platform.components();
 
-        // Build the robot-side mover from the sim bridge's wheels.
-        Mover mover = new WheeledMover(robot.leftWheel(), robot.rightWheel());
-        Sensors sensors = robot.sensors();
+        // Build the robot-side mover from the manifest-declared wheels.
+        Mover mover = new WheeledMover(reg.wheels());
+        ProximitySensor front = reg.sensor("front-sensor");
+        ProximitySensor right = reg.sensor("right-sensor");
 
-        RobotBehaviour behaviour = createBehaviour(behaviourName, mover, sensors);
+        RobotBehaviour behaviour = createBehaviour(behaviourName, mover, front, right);
 
-        Brain brain = new DefaultBrain(mover, sensors);
+        Brain brain = new DefaultBrain(mover, front, right);
         brain.setBehaviour(behaviour);
 
-        Runtime.getRuntime().addShutdownHook(new Thread(robot::stop, "robot-shutdown"));
+        Runtime.getRuntime().addShutdownHook(new Thread(platform::stop, "robot-shutdown"));
 
-        robot.run(brain);
+        platform.run(brain);
         log.info("Behaviour loop running at ~20 Hz");
 
-        while (robot.isRunning()) {
+        while (platform.isRunning()) {
             try {
                 Thread.sleep(500);
             } catch (InterruptedException e) {
@@ -95,14 +108,15 @@ public class RobotController implements Runnable {
         log.info("Shutdown complete");
     }
 
-    private static RobotBehaviour createBehaviour(String name, Mover mover, Sensors sensors) {
+    private static RobotBehaviour createBehaviour(String name, Mover mover,
+                                                  ProximitySensor front, ProximitySensor right) {
         return switch (name) {
-            case "square" -> new SquareTraceBehaviour(mover, sensors);
-            case "wall-avoid" -> new WallAvoidBehaviour(mover, sensors);
-            case "wall-follow-right" -> new WallFollowRightBehaviour(mover, sensors);
-            case "circle" -> new CircleTraceBehaviour(mover, sensors);
-            case "heart" -> new HeartTraceBehaviour(mover, sensors);
-            case "brownian" -> new BrownianMotionBehaviour(mover, sensors);
+            case "square" -> new SquareTraceBehaviour(mover, front, right);
+            case "wall-avoid" -> new WallAvoidBehaviour(mover, front, right);
+            case "wall-follow-right" -> new WallFollowRightBehaviour(mover, front, right);
+            case "circle" -> new CircleTraceBehaviour(mover, front, right);
+            case "heart" -> new HeartTraceBehaviour(mover, front, right);
+            case "brownian" -> new BrownianMotionBehaviour(mover, front, right);
             default -> null;
         };
     }

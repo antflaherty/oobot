@@ -23,7 +23,7 @@ process. The channel/port implies who is talking — there is no
 
 | Channel | URL | Direction | Carries |
 |---------|-----|-----------|---------|
-| Robot channel | `ws://localhost:ROBOT_PORT` | Bidirectional | `motorCommand` (robot → sim), `sensorSnapshot` (sim → robot) |
+| Robot channel | `ws://localhost:ROBOT_PORT` | Bidirectional | `componentCommand` (robot → sim), `componentSnapshot` (sim → robot) |
 | Visualiser channel | `ws://localhost:VISUALISER_PORT` | Primarily unidirectional | `worldSnapshot` (sim → visualiser); `userControl` (visualiser → sim) deferred |
 
 - The robot controller (Java process) connects to the **robot channel**.
@@ -56,7 +56,7 @@ Every message on either channel carries the same baseline envelope:
 
 | Field | Meaning |
 |-------|---------|
-| `type` | Message kind, e.g. `motorCommand`, `sensorSnapshot`, `worldSnapshot`, `userControl`. |
+| `type` | Message kind, e.g. `componentCommand`, `componentSnapshot`, `worldSnapshot`, `userControl`. |
 | `seq` | Per-connection sequence number, starting at 0, incremented by the sender on each message it sends. Used for deduplication and ordering on that connection. |
 | `simTick` | Simulation logical tick number the message relates to. The **source of truth** for sequencing and staleness. |
 | `payload` | Message-specific data (see section 6). |
@@ -73,7 +73,7 @@ wall-clock drift across processes; it is judged by `simTick` difference.
 - The sim owns the authoritative logical clock (`simTick`), advancing one
   tick per sim step (target ~60 Hz).
 - Every snapshot carries the `simTick` of the world state it describes.
-- The robot echoes the last tick it acted on in its `motorCommand` messages
+- The robot echoes the last tick it acted on in its `componentCommand` messages
   (optional but useful for debugging staleness).
 - A receiver judges freshness by comparing `simTick` values, never by
   comparing wall-clock times between the robot and sim processes.
@@ -82,62 +82,69 @@ wall-clock drift across processes; it is judged by `simTick` difference.
 
 ### 6.1 Robot channel
 
-#### `motorCommand` — robot → sim
+Message names are **id-addressed**: commands and readings carry component
+`id`s from the shared manifest (`specs/ROBOT_DESCRIPTION.md`,
+`robots/default.json`) instead of fixed left/right/front/right slots.
+`motorCommand` and `sensorSnapshot` are removed (breaking change). The
+envelope and NDJSON framing are unchanged.
 
-Issued by the robot controller through the Java framework API
-(`Motor.setSpeed(...)`). Motors use **persistent actuator state**: they keep
-running at the last commanded speed until overridden. The sim never waits
-for the robot; if the robot is slow, the sim reuses the previous command.
+#### `componentCommand` — robot → sim
+
+Issued by the robot controller through the Java framework API. Components use
+**persistent actuator state**: wheels keep their last commanded value until
+overridden. The sim never waits for the robot; if the robot is slow, the sim
+reuses the previous command.
 
 Example:
 
 ```json
-{ "type": "motorCommand", "seq": 7, "simTick": 142, "payload": { "left": 1.0, "right": 0.5 } }
+{ "type": "componentCommand", "seq": 7, "simTick": 142,
+  "payload": { "commands": [
+    { "id": "left-wheel", "value": 1.0 },
+    { "id": "right-wheel", "value": -1.0 }
+  ] } }
 ```
-
-Payload schema (MVP iteration 1):
-
-| Field | Type | Range | Meaning |
-|---|---|---|---|
-| `left` | number | `[-1, 1]` | Left motor power (negative = reverse) |
-| `right` | number | `[-1, 1]` | Right motor power (negative = reverse) |
-
-Differential drive. `1.0` = full forward, `-1.0` = full reverse, `0` = stop.
-
-**Note:** This schema is expected to become more complex in a future
-iteration (e.g. per-motor acceleration limits, duration fields). It is
-locked for MVP iteration 1 and should be treated as version 1 of the
-protocol.
-
-#### `sensorSnapshot` — sim → robot
-
-Published by the sim on each tick (or as configured). The robot reads the
-latest available value on its behaviour loop (~20 Hz).
-
-The sim casts two front-facing proximity rays each tick — one along the
-robot's heading (front) and one at 90 degrees to its right — and publishes the
-nearest hit among obstacles and world box edges for each. The payload carries
-both readings; a reading is `null` when nothing is detected in that direction.
 
 Payload schema:
 
-| Field   | Type    | Meaning                                               | Presence                        |
-|---------|---------|-------------------------------------------------------|---------------------------------|
-| `front` | number \| null | Distance in world units to nearest hit ahead along the front-facing ray | present when something detected |
-| `right` | number \| null | Distance in world units to nearest hit ahead along the right-facing ray (heading - PI/2) | present when something detected |
+| Field | Type | Range | Meaning |
+|---|---|---|---|
+| `commands` | array | — | One entry per commanded component |
+| `commands[].id` | string | manifest id | Target component id (e.g. `left-wheel`) |
+| `commands[].value` | number | `[-1, 1]` for wheels | Commanded value; sim clamps to range |
+
+Wheel `value` maps to the wheel's derived lateral role (left/right from
+`sin(angle)` in the manifest). `1.0` = full forward, `-1.0` = full reverse,
+`0` = stop.
+Unknown id, wrong component type, or malformed value → log and ignore.
+
+#### `componentSnapshot` — sim → robot
+
+Published by the sim on each tick (or as configured). The robot reads the
+latest available value on its behaviour loop (~20 Hz). There is **one reading
+per declared proximity sensor** in the manifest; each ray is cast from the
+robot centre at `heading + component.angle` (mount angle relative to heading;
+radians, 0 = forward, + = CCW, right = -π/2). A reading is `null` when nothing
+is detected along that ray. There are no hardcoded front/right sensors.
+
+Payload schema:
+
+| Field | Type | Meaning |
+|---|---|---|
+| `readings` | array | One entry per declared `proximitySensor` |
+| `readings[].id` | string | Sensor component id (e.g. `front-sensor`) |
+| `readings[].value` | number \| null | Distance in world units to nearest hit, or `null` when nothing detected |
 
 `simTick` is on the envelope as always (source of truth for staleness).
 
-Example — front wall 3.5 units ahead, right wall 12 units away:
+Example — front wall 3.5 units ahead, right sensor detects nothing:
 
 ```json
-{ "type": "sensorSnapshot", "seq": 7, "simTick": 142, "payload": { "front": 3.5, "right": 12.0 } }
-```
-
-Example — nothing detected ahead or to the right:
-
-```json
-{ "type": "sensorSnapshot", "seq": 8, "simTick": 143, "payload": { "front": null, "right": null } }
+{ "type": "componentSnapshot", "seq": 7, "simTick": 142,
+  "payload": { "readings": [
+    { "id": "front-sensor", "value": 3.5 },
+    { "id": "right-sensor", "value": null }
+  ] } }
 ```
 
 ### 6.2 Visualiser channel
@@ -187,28 +194,31 @@ schema is defined yet.
 
 ## 8. Sensor model
 
-The sim maintains the **latest sensor values + `simTick` in a single slot**,
-overwriting it each tick:
+The sim maintains a **single slot of sensor readings + `simTick`**, overwritten
+each tick:
 
 - No queue.
 - No polling.
-- Two readings per slot: `front` (along the robot's heading) and `right` (at
-  90 degrees to the robot's right). Each is the nearest hit among obstacles and
-  world box edges, or `null` when nothing is detected in that direction.
+- **One reading per declared proximity sensor** in the manifest. Each ray is
+  cast from the robot centre at `heading + component.angle` (mount angle
+  relative to heading; radians, 0 = forward, + = CCW, right = -π/2) and reports
+  the nearest hit among obstacles and world box edges, or `null` when nothing
+  is detected. There are no hardcoded front/right sensors.
 - If the sim runs at 60 Hz and the robot reads at 20 Hz, ~2/3 of samples are
   silently dropped by being overwritten; the robot always sees the most
   recent reading.
-- `simTick` is on every reading so a behaviour can check staleness later if
+- `simTick` is on every snapshot so a behaviour can check staleness later if
   needed, but no maximum-staleness check is required for MVP.
 
-The `sensorSnapshot` payload carries `{ front, right }` (see section 6.1).
+The `componentSnapshot` payload carries `{ readings: [{ id, value }] }`, keyed
+by manifest component id (see section 6.1).
 
 ## 9. Summary table: message types per channel
 
 | Channel | Message | Direction | simTick on every message? | MVP iteration 1 | Notes |
 |---------|---------|-----------|---------------------------|-----------------|-------|
-| Robot (`ROBOT_PORT`) | `motorCommand` | robot → sim | Yes | ✅ | Persistent actuator state; last command reused if robot is slow; payload: `{ left, right }` in `[-1, 1]` |
-| Robot (`ROBOT_PORT`) | `sensorSnapshot` | sim → robot | Yes | ✅ | Single-slot sensor model; payload: `{ front, right }`, each a number or `null` when nothing detected |
+| Robot (`ROBOT_PORT`) | `componentCommand` | robot → sim | Yes | ✅ | Persistent actuator state; last command reused if robot is slow; payload: `{ commands: [{ id, value }] }`, wheel `value` in `[-1, 1]`, mapped via derived lateral role |
+| Robot (`ROBOT_PORT`) | `componentSnapshot` | sim → robot | Yes | ✅ | Single-slot sensor model; one reading per declared proximity sensor at `heading + angle`; payload: `{ readings: [{ id, value }] }`, value number or `null` |
 | Visualiser (`VISUALISER_PORT`) | `worldSnapshot` | sim → visualiser | Yes | ✅ | Drop-oldest backpressure; no blocking on visualiser; payload: `{ robot: { x, y, heading } }` |
 | Visualiser (`VISUALISER_PORT`) | `userControl` | visualiser → sim | — | ❌ deferred | Start/pause/reset etc.; future iteration |
 

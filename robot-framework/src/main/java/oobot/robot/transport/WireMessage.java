@@ -11,10 +11,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  */
 @JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
 @JsonSubTypes({
-    @JsonSubTypes.Type(value = MotorCommandMessage.class, name = "motorCommand"),
-    @JsonSubTypes.Type(value = SensorSnapshotMessage.class, name = "sensorSnapshot")
+    @JsonSubTypes.Type(value = ComponentCommandMessage.class, name = "componentCommand"),
+    @JsonSubTypes.Type(value = ComponentSnapshotMessage.class, name = "componentSnapshot")
 })
-public sealed interface WireMessage permits MotorCommandMessage, SensorSnapshotMessage {
+public sealed interface WireMessage permits ComponentCommandMessage, ComponentSnapshotMessage {
     long seq();
     long simTick();
 }

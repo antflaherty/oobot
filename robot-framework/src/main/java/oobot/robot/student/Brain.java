@@ -7,8 +7,8 @@ package oobot.robot.student;
  * <p>
  * This is a <b>student-facing interface</b>. Students write their own
  * {@code Brain} implementation to perform dependency injection: assemble a
- * {@link Mover}, {@link Sensors}, and an initial {@link RobotBehaviour}, then
- * hand the brain to the behaviour loop. The loop repeatedly calls
+ * {@link Mover}, named {@link ProximitySensor}s, and an initial
+ * {@link RobotBehaviour}, then hand the brain to the behaviour loop. The loop repeatedly calls
  * {@link #tick()}, which delegates to the current behaviour's
  * {@link RobotBehaviour#update()}.
  * <p>
@@ -20,8 +20,11 @@ public interface Brain {
     /** High-level movement commands (forward, backward, turnLeft, turnRight, stop). */
     Mover mover();
 
-    /** Proximity sensor readings (front, right). */
-    Sensors sensors();
+    /** Front proximity sensor, identified by its manifest component id. */
+    ProximitySensor frontSensor();
+
+    /** Right proximity sensor, identified by its manifest component id. */
+    ProximitySensor rightSensor();
 
     /**
      * Swap the active behaviour. Invokes {@link RobotBehaviour#init()} on the

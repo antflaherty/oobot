@@ -9,15 +9,14 @@
  *       translate high-level commands ({@code forward()}, {@code turnRight()},
  *       ...) into per-wheel actions.</li>
  *   <li>{@link Brain} — the DI/wiring layer: assemble a {@link Mover},
- *       {@link Sensors}, and an initial {@link RobotBehaviour}, then hand the
- *       brain to the behaviour loop.</li>
+ *       {@link ProximitySensor}, and an initial {@link RobotBehaviour}, then hand
+ *       the brain to the behaviour loop.</li>
  * </ul>
  *
- * <p>{@link Sensors} and {@link Wheel} are the student-facing sensor/wheel
+ * <p>{@link ProximitySensor} and {@link Wheel} are the student-facing sensor/wheel
  * interfaces; the sim bridge ({@code oobot.robot.bridge.sim}) provides their
- * implementations ({@link oobot.robot.bridge.sim.SimSensors},
- * {@link oobot.robot.bridge.sim.SimWheel}). Robot code never touches sockets,
- * JSON, motor power values, or wheel mounting directly.
+ * implementations. Robot code never touches sockets, JSON, motor power values,
+ * or wheel mounting directly.
  *
  * <p>Framework-provided pieces live below this layer and are not student code:
  * <ul>

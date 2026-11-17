@@ -276,7 +276,7 @@ If desired later: the sim could include the sensor ray end-point in
 | 9.1 | Box edges as detectable walls? | **Yes** — each ray reports the nearest hit among obstacles and the world box edges. Lets a robot wall-follow in an empty box; cheap analytic math. |
 | 9.2 | Nothing-detected representation? | **`"front": null` / `"right": null`** when nothing detected in that direction; Java maps null → `Double.POSITIVE_INFINITY`. |
 | 9.3 | Obstacle shapes? | **Axis-aligned boxes (walls)** to start. Circles can be added later. |
-| 9.4 | Sensor mount? | **Fixed at robot centre, facing heading.** Robot is currently a point; keep it simple. Future non-point robots may need a configurable offset/angle — revisit then. |
+| 9.4 | Sensor mount? | **Mount angle declared in the manifest** (`angle`, radians relative to heading; 0 = forward, + = CCW, right = -π/2). Robot stays a point; rays originate at robot centre at `heading + angle` — no `x`/`y` offsets. |
 | 9.5 | Range cap? | **Infinite within the box** — box edges act as the backstop (per 9.1). No `maxRange` config for iteration 2. |
 
 ---

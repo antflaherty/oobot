@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.Sensors;
+import oobot.robot.student.ProximitySensor;
 
 /**
  * Example robot behaviour: follow the right wall using two proximity sensors.
@@ -46,7 +46,7 @@ import oobot.robot.student.Sensors;
  * the robot into the wall. Holding parallel instead produces a small, bounded
  * weave around a constant offset — never a runaway diagonal.
  * <p>
- * {@link Sensors#distance()} and {@link Sensors#rightDistance()} return
+ * The front and right {@link ProximitySensor#distance()} values return
  * {@link Double#POSITIVE_INFINITY} when nothing is detected (e.g. not
  * connected), so in open space the robot spins right until it finds a wall,
  * then tracks alongside it.
@@ -94,11 +94,13 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
     private int turnEndTicks;
 
     private final Mover mover;
-    private final Sensors sensors;
+    private final ProximitySensor front;
+    private final ProximitySensor right;
 
-    public WallFollowRightBehaviour(Mover mover, Sensors sensors) {
+    public WallFollowRightBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
         this.mover = mover;
-        this.sensors = sensors;
+        this.front = front;
+        this.right = right;
     }
 
     @Override
@@ -115,8 +117,8 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
 
     @Override
     public void update() {
-        double front = sensors.distance();
-        double right = sensors.rightDistance();
+        double front = this.front.distance();
+        double right = this.right.distance();
 
         // 1. Front obstacle has absolute priority in every state: rotate the
         //    front ray off the obstacle until the front clears.
