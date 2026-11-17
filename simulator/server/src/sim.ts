@@ -218,7 +218,14 @@ export class SimEngine {
 
     // 1. Apply the latest motor command (persistent actuator state — reused
     //    if the robot is slow; sim never waits for a new command).
-    this.world.apply(this.latestCommand.left, this.latestCommand.right);
+    const collision = this.world.apply(this.latestCommand.left, this.latestCommand.right);
+    if (collision.collided) {
+      const p = this.world.pose;
+      log(
+        `collision at tick ${this.simTick}: pose=(${p.x.toFixed(2)},${p.y.toFixed(2)}) ` +
+          `stopped against obstacle/boundary`,
+      );
+    }
 
     // 2. Compute the front-proximity sensor readings (iteration 2): cast the
     //    front ray and a right-facing ray (heading - PI/2) against the world

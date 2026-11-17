@@ -81,8 +81,9 @@ export class WorldModel {
 
   // Apply one tick of differential-drive motion with the given motor powers.
   // Returns flags indicating whether either axis was clamped at a box edge
-  // (stop-dead collision).
-  apply(left: number, right: number): { clampedX: boolean; clampedY: boolean } {
+  // (stop-dead collision) and whether the robot came into contact with an
+  // obstacle (stop-dead before penetration).
+  apply(left: number, right: number): { clampedX: boolean; clampedY: boolean; collided: boolean } {
     const l = clamp(left, -1, 1);
     const r = clamp(right, -1, 1);
 
@@ -96,11 +97,38 @@ export class WorldModel {
     // Integrate translation at the midpoint heading for smoother curves.
     const midHeading = this.pose.heading + angular * this.dt / 2;
 
-    let nx = this.pose.x + Math.cos(midHeading) * linear * this.dt;
-    let ny = this.pose.y + Math.sin(midHeading) * linear * this.dt;
+    const px = this.pose.x;
+    const py = this.pose.y;
+
+    let nx = px + Math.cos(midHeading) * linear * this.dt;
+    let ny = py + Math.sin(midHeading) * linear * this.dt;
 
     let clampedX = false;
     let clampedY = false;
+    let collided = false;
+
+    // Obstacle collision: ray-cast from the current position toward the
+    // intended new position and stop at the first contact point (stop-dead,
+    // no penetration). The robot keeps rotating even when translation stops.
+    const dx = nx - px;
+    const dy = ny - py;
+    const dist = Math.hypot(dx, dy);
+    if (dist > 0 && this.obstacles.length > 0) {
+      const ux = dx / dist;
+      const uy = dy / dist;
+      let nearestT: number | null = null;
+      for (const obs of this.obstacles) {
+        const t = rayVsAxisAlignedBox(px, py, ux, uy, obs);
+        if (t !== null && t <= dist && (nearestT === null || t < nearestT)) {
+          nearestT = t;
+        }
+      }
+      if (nearestT !== null) {
+        nx = px + nearestT * ux;
+        ny = py + nearestT * uy;
+        collided = true;
+      }
+    }
 
     if (nx < this.minX) { nx = this.minX; clampedX = true; }
     else if (nx > this.maxX) { nx = this.maxX; clampedX = true; }
@@ -109,7 +137,7 @@ export class WorldModel {
     else if (ny > this.maxY) { ny = this.maxY; clampedY = true; }
 
     this.pose = { x: nx, y: ny, heading: newHeading };
-    return { clampedX, clampedY };
+    return { clampedX, clampedY, collided };
   }
 
   // Zero out translational motion at the current pose (used after a clamp if
