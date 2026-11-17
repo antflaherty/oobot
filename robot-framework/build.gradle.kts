@@ -16,6 +16,7 @@ dependencies {
     implementation(libs.slf4j.api)
     runtimeOnly(libs.logback.classic)
     implementation(libs.picocli)
+    testImplementation(libs.junit)
 }
 
 java {
@@ -26,6 +27,12 @@ java {
 
 tasks.withType<JavaCompile> {
     options.encoding = "UTF-8"
+}
+
+tasks.test {
+    useJUnitPlatform()
+    // Tests resolve fixtures from the Gradle project dir, never the process CWD.
+    systemProperty("oobot.projectDir", layout.projectDirectory.asFile.absolutePath)
 }
 
 application {

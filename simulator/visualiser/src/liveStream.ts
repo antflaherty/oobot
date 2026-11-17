@@ -5,6 +5,10 @@
 //   ws://localhost:VISUALISER_PORT
 // and buffers incoming `worldSnapshot` NDJSON messages with their arrival
 // times so the renderer can interpolate between them on each render frame.
+//
+// Dependencies are injectable so the stream can be unit-tested in Node without
+// a browser or a real socket. All defaults use the browser globals, so
+// `new LiveStream()` in main.ts keeps working unchanged.
 // ---------------------------------------------------------------------------
 
 import type { WorldSnapshot, RobotPose, Obstacle } from './types';
@@ -20,10 +24,18 @@ export interface PoseResult {
   holding: boolean;
 }
 
+/** Optional injectable dependencies. Every field defaults to a browser global. */
+export interface LiveStreamDeps {
+  createWebSocket?: (url: string) => WebSocket;
+  now?: () => number;
+  setTimeout?: (fn: () => void, ms: number) => number;
+  clearTimeout?: (id: number) => void;
+}
+
 interface BufferedSnapshot {
   simTick: number;
   pose: RobotPose;
-  receivedAt: number; // performance.now() when received
+  receivedAt: number; // now() when received
 }
 
 export class LiveStream {
@@ -34,11 +46,28 @@ export class LiveStream {
   private reconnectTimer: number | null = null;
   private latestObstacles: Obstacle[] = [];
   private onTrailPoint: ((x: number, y: number) => void) | null = null;
+  private onTrailReset: (() => void) | null = null;
+
+  // Partial NDJSON line carried across onmessage calls.
+  private lineBuffer = '';
 
   // Reference point for the continuously advancing render clock.
   // renderTick = baseTick + (now - baseTime) * TICKS_PER_SECOND / 1000
   private baseTick = 0;
   private baseTime = 0;
+
+  private readonly createWebSocket: (url: string) => WebSocket;
+  private readonly now: () => number;
+  private readonly scheduleTimeout: (fn: () => void, ms: number) => number;
+  private readonly cancelTimeout: (id: number) => void;
+
+  constructor(deps: LiveStreamDeps = {}) {
+    this.createWebSocket = deps.createWebSocket ?? ((url) => new WebSocket(url));
+    this.now = deps.now ?? (() => performance.now());
+    this.scheduleTimeout =
+      deps.setTimeout ?? ((fn, ms) => window.setTimeout(fn, ms));
+    this.cancelTimeout = deps.clearTimeout ?? ((id) => window.clearTimeout(id));
+  }
 
   start(): void {
     this.connect();
@@ -47,7 +76,7 @@ export class LiveStream {
   stop(): void {
     this.connected = false;
     if (this.reconnectTimer !== null) {
-      window.clearTimeout(this.reconnectTimer);
+      this.cancelTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
     if (this.ws) {
@@ -74,6 +103,25 @@ export class LiveStream {
    * from render frames (which pause while the tab is hidden). */
   setTrailPointCallback(cb: (x: number, y: number) => void): void {
     this.onTrailPoint = cb;
+  }
+
+  /** Register a callback invoked by reset() so the owner of the trail callback
+   * can discard points recorded from snapshots that reset() just dropped.
+   * The renderer trail itself is owned (and cleared) outside this class. */
+  setTrailResetCallback(cb: () => void): void {
+    this.onTrailReset = cb;
+  }
+
+  /** Discard all buffered snapshot/session state. Used on (re)connect and when
+   * a sim tick rollback signals a new session. */
+  reset(): void {
+    this.snapshots = [];
+    this.latestTick = -1;
+    this.baseTick = 0;
+    this.baseTime = 0;
+    this.latestObstacles = [];
+    this.lineBuffer = '';
+    this.onTrailReset?.();
   }
 
   /** Interpolate the robot pose at the given wall-clock render time. */
@@ -133,7 +181,7 @@ export class LiveStream {
 
   private connect(): void {
     const url = `ws://localhost:${VISUALISER_PORT}`;
-    this.ws = new WebSocket(url);
+    this.ws = this.createWebSocket(url);
 
     this.ws.onopen = () => {
       this.connected = true;
@@ -143,8 +191,11 @@ export class LiveStream {
     this.ws.onmessage = (event: MessageEvent) => {
       const text =
         typeof event.data === 'string' ? event.data : new TextDecoder().decode(event.data);
-      // NDJSON: one JSON object per line.
-      const lines = text.split('\n');
+      // NDJSON: one JSON object per line. A line may be split across frames,
+      // so carry the trailing partial line into the next onmessage call.
+      this.lineBuffer += text;
+      const lines = this.lineBuffer.split('\n');
+      this.lineBuffer = lines.pop() ?? '';
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
@@ -173,7 +224,7 @@ export class LiveStream {
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer !== null) return;
-    this.reconnectTimer = window.setTimeout(() => {
+    this.reconnectTimer = this.scheduleTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
     }, RECONNECT_DELAY_MS);
@@ -183,7 +234,7 @@ export class LiveStream {
     const buffered: BufferedSnapshot = {
       simTick: snapshot.simTick,
       pose: { ...snapshot.payload.robot },
-      receivedAt: performance.now(),
+      receivedAt: this.now(),
     };
     this.snapshots.push(buffered);
     this.latestTick = snapshot.simTick;

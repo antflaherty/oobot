@@ -11,9 +11,10 @@
 // VISUALISER_PORT environment variables. Localhost only, hardcoded ports,
 // no discovery (DESIGN_REVIEW 6.1 / 6.4).
 //
-// By default the sim loads the maze world from simulator/server/worlds/maze.json.
-// If the file is missing or unparseable a warning is logged and the sim falls
-// back to an empty default world — it never crashes on a bad world file.
+// By default the sim loads the maze world from simulator/server/worlds/maze.json
+// and the manifest from robots/default.json; --world <path> and --robot <path>
+// override those. If the world file is missing or unparseable a warning is
+// logged and the sim falls back to an empty default world.
 
 import { WebSocketTransport } from "./transport";
 import { SimEngine } from "./sim";
@@ -25,21 +26,35 @@ import {
 } from "./world";
 import * as path from "path";
 
-const ROBOT_PORT = Number(process.env.ROBOT_PORT ?? 8080);
-const VISUALISER_PORT = Number(process.env.VISUALISER_PORT ?? 8081);
+function parsePort(name: string, raw: string | undefined, fallback: number): number {
+  if (raw === undefined || raw === "") return fallback;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > 65535) {
+    throw new Error(`${name} must be an integer in 1..65535 (got "${raw}")`);
+  }
+  return value;
+}
 
-// Resolved relative to this file's directory so it works regardless of cwd
-// (ts-node runs src/index.ts, so go up one level to the server root).
-const DEFAULT_WORLD_FILE = path.join(__dirname, "..", "worlds", "maze.json");
+// Both defaults are resolved from this file's directory so the server works
+// regardless of cwd (src/ under ts-node, dist/ when built).
+const DEFAULT_WORLD_FILE = path.resolve(__dirname, "..", "worlds", "maze.json");
+const DEFAULT_ROBOT_FILE = path.resolve(
+  __dirname,
+  "..",
+  "..",
+  "..",
+  "robots",
+  "default.json",
+);
 
-// --robot <path> selects the component manifest; default is robots/default.json
-// resolved from the current working directory.
-function robotDescriptionPath(): string {
-  const flagIndex = process.argv.indexOf("--robot");
-  const provided = flagIndex >= 0 ? process.argv[flagIndex + 1] : undefined;
-  return provided
-    ? path.resolve(provided)
-    : path.resolve(process.cwd(), "robots", "default.json");
+function optionPath(flag: string, fallback: string): string {
+  const flagIndex = process.argv.indexOf(flag);
+  if (flagIndex < 0) return fallback;
+  const provided = process.argv[flagIndex + 1];
+  if (!provided || provided.startsWith("--")) {
+    throw new Error(`${flag} requires a path`);
+  }
+  return path.resolve(provided);
 }
 
 function log(...args: unknown[]): void {
@@ -48,34 +63,37 @@ function log(...args: unknown[]): void {
 }
 
 async function main(): Promise<void> {
-  const options: TransportOptions = { robotPort: ROBOT_PORT, visualiserPort: VISUALISER_PORT };
+  const robotPort = parsePort("ROBOT_PORT", process.env.ROBOT_PORT, 8080);
+  const visualiserPort = parsePort("VISUALISER_PORT", process.env.VISUALISER_PORT, 8081);
+  const options: TransportOptions = { robotPort, visualiserPort };
+  const worldFile = optionPath("--world", DEFAULT_WORLD_FILE);
 
   const transport = new WebSocketTransport();
 
-  // Load the default world file; fall back to an empty world on any failure.
+  // Load the selected world file; fall back to an empty world on any failure.
   let worldConfig: WorldConfig | undefined;
   let startPose: RobotPose = { x: 0, y: 0, heading: 0 };
   let obstacles: Obstacle[] = [];
 
   try {
-    const loaded = loadWorldFile(DEFAULT_WORLD_FILE);
+    const loaded = loadWorldFile(worldFile);
     worldConfig = loaded.config;
     startPose = loaded.startPose;
     obstacles = loaded.obstacles;
     log(
-      `loaded world file: ${DEFAULT_WORLD_FILE} ` +
+      `loaded world file: ${worldFile} ` +
         `(box ${loaded.config.width}x${loaded.config.height}, ${obstacles.length} obstacles, ` +
         `start=(${startPose.x},${startPose.y},heading=${startPose.heading}))`,
     );
   } catch (err) {
     log(
-      `warning: could not load world file "${DEFAULT_WORLD_FILE}": ${
+      `warning: could not load world file "${worldFile}": ${
         err instanceof Error ? err.message : String(err)
       } — falling back to empty default world`,
     );
   }
 
-  const robotDescriptionPathResolved = robotDescriptionPath();
+  const robotDescriptionPathResolved = optionPath("--robot", DEFAULT_ROBOT_FILE);
   const robotDescription = loadRobotDescription(robotDescriptionPathResolved);
   log(`loaded robot manifest: ${robotDescription.name} (${robotDescriptionPathResolved}) — ${robotDescription.components.length} components`);
 
@@ -104,8 +122,8 @@ async function main(): Promise<void> {
   sim.start();
 
   log(
-    `sim server running: robot channel ws://localhost:${ROBOT_PORT}, ` +
-      `visualiser channel ws://localhost:${VISUALISER_PORT}`
+    `sim server running: robot channel ws://localhost:${robotPort}, ` +
+      `visualiser channel ws://localhost:${visualiserPort} (world: ${worldFile})`
   );
 }
 
