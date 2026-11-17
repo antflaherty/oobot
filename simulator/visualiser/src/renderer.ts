@@ -37,7 +37,7 @@ const OBSTACLE_STROKE = "#111827";
 //
 // The trail keeps a short history of the robot's world positions and draws
 // them as a fading polyline behind the robot. Tweak `maxPoints` to change
-// how long the trail is (at ~60 fps, 120 points ≈ 2 seconds of history).
+// how long the trail is (at ~60 fps, 100 points ≈ 1.7 seconds of history).
 // ---------------------------------------------------------------------------
 export interface TrailConfig {
   maxPoints: number; // max number of trail points to retain

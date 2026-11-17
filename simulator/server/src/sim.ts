@@ -61,6 +61,18 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+// D-4: seq and simTick must be finite, non-negative integers. This rejects
+// NaN, Infinity, fractional values, negatives and (via the type check) missing
+// simTick before any command can touch actuator state.
+function isNonNegativeInteger(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isFinite(value) &&
+    Number.isInteger(value) &&
+    value >= 0
+  );
+}
+
 function log(...args: unknown[]): void {
   const stamp = new Date().toISOString().slice(11, 19);
   console.log(`[sim] ${stamp}`, ...args);
@@ -86,6 +98,11 @@ export class SimEngine {
   private latestReadings: ComponentReading[] = [];
 
   private robotConnectionId: string | null = null;
+
+  // D-4: sequence/freshness state for the currently active robot connection.
+  // Reset whenever the active robot slot changes (new connection or disconnect).
+  private lastAppliedSeq = -1;
+  private lastSeenTick: number | null = null;
 
   private running = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
@@ -114,15 +131,34 @@ export class SimEngine {
     this.transport.setHandlers({
       onConnect: (connectionId: string, channel: Channel) => {
         if (channel === "robot") {
+          const previous = this.robotConnectionId;
+          // Claim the slot (and reset D-4 tracking) before closing the old
+          // connection: its synchronous disconnect must not clear the new slot.
           this.robotConnectionId = connectionId;
+          this.resetRobotCommandState();
+          if (previous && previous !== connectionId) {
+            log(`robot slot taken by ${connectionId}; closing previous robot ${previous}`);
+            this.transport.close(previous);
+          }
           log(`robot connected (${connectionId}) — awaiting componentCommand`);
         } else {
           log(`visualiser connected (${connectionId})`);
         }
       },
-      onMessage: (_connectionId: string, envelope: IncomingEnvelope) => {
+      onMessage: (
+        connectionId: string,
+        channel: Channel,
+        envelope: IncomingEnvelope,
+      ) => {
         if (envelope.type === "componentCommand") {
-          this.handleComponentCommand(envelope);
+          if (channel !== "robot" || connectionId !== this.robotConnectionId) {
+            log(
+              `ignoring componentCommand from non-active connection ` +
+                `${channel}/${connectionId} (active robot: ${this.robotConnectionId ?? "none"})`,
+            );
+            return;
+          }
+          this.handleComponentCommand(connectionId, envelope);
         } else {
           log(`ignoring unexpected message type "${envelope.type}"`);
         }
@@ -132,7 +168,10 @@ export class SimEngine {
           log(`robot disconnected (${connectionId})`);
           if (connectionId === this.robotConnectionId) {
             this.robotConnectionId = null;
+            this.resetRobotCommandState();
             this.stopMotors(); // safe stop — motors cannot keep running
+          } else {
+            log(`stale robot disconnect ignored (${connectionId})`);
           }
         } else {
           log(`visualiser disconnected (${connectionId})`);
@@ -162,12 +201,56 @@ export class SimEngine {
 
   // ---- Robot channel input ----------------------------------------------
 
-  private handleComponentCommand(envelope: IncomingEnvelope): void {
+  private resetRobotCommandState(): void {
+    this.lastAppliedSeq = -1;
+    this.lastSeenTick = null;
+  }
+
+  private handleComponentCommand(connectionId: string, envelope: IncomingEnvelope): void {
+    // Ownership was checked by onMessage; keep this guard so the invariant is
+    // enforced at the point where actuator state is about to be touched.
+    if (envelope.type !== "componentCommand" || connectionId !== this.robotConnectionId) {
+      log(`ignoring componentCommand from non-active connection ${connectionId}`);
+      return;
+    }
+
+    const { seq, simTick } = envelope;
+    // D-4 step 2: finite, non-negative integers only.
+    if (!isNonNegativeInteger(seq) || !isNonNegativeInteger(simTick)) {
+      log(
+        `ignoring componentCommand with invalid seq/simTick from ${connectionId} ` +
+          `(seq=${String(seq)}, simTick=${String(simTick)})`,
+      );
+      return;
+    }
+
+    // D-4 step 3: duplicate / out-of-order seq.
+    if (seq <= this.lastAppliedSeq) {
+      log(
+        `ignoring duplicate/stale componentCommand seq=${seq} ` +
+          `(lastAppliedSeq=${this.lastAppliedSeq}) from ${connectionId}`,
+      );
+      return;
+    }
+
+    // D-4 step 4: one tick of tolerance for benign reordering; older is stale.
+    if (this.lastSeenTick !== null && simTick < this.lastSeenTick - 1) {
+      log(
+        `ignoring stale componentCommand simTick=${simTick} ` +
+          `(lastSeenTick=${this.lastSeenTick}) from ${connectionId}`,
+      );
+      return;
+    }
+
     const payload = envelope.payload;
     if (!isComponentCommandPayload(payload)) {
       log("ignoring malformed componentCommand payload:", JSON.stringify(payload).slice(0, 120));
       return;
     }
+
+    // Accepted: advance tracking state only now, before touching actuators.
+    this.lastAppliedSeq = seq;
+    this.lastSeenTick = Math.max(this.lastSeenTick ?? simTick, simTick);
 
     for (const command of payload.commands) {
       let component: ComponentDescription;

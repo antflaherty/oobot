@@ -6,10 +6,11 @@
 // (see the Obstacle interface) that the front proximity sensor can detect via
 // ray casting.
 //
-// Kinematics: differential drive. Motor powers left/right in [-1, 1] map to
-// linear and angular velocity; the pose is integrated each fixed timestep and
-// clamped at the box edges with stop-dead collision response (no sliding,
-// bouncing, or penetration).
+// Kinematics: differential drive. Motor powers left/right in [-1, 1] are
+// converted to metres/second before computing angular velocity (D-1); linear
+// speed stays in world units/second. The pose is integrated each fixed
+// timestep and clamped at the box edges with stop-dead collision response (no
+// sliding, bouncing, or penetration).
 //
 // NOTE: box dimensions, max speed, track width and start pose are scaffolding
 // decisions (specs/COMPONENTS.md §1.4, §1.7 say "fixed at scaffolding"). They
@@ -17,12 +18,15 @@
 
 import * as fs from "fs";
 
+// The world box is in world units, but wheel speed and track width are in
+// metres (see docs/DECISIONS.md D-1). This is the single conversion point.
+export const WORLD_UNITS_PER_METRE = 100;
+
 export interface WorldConfig {
   width: number;      // world units, X extent of the box
   height: number;     // world units, Y extent of the box
   maxSpeed: number;   // world units per second at full motor power (1.0)
-  maxAngularSpeed: number; // radians per second at full differential drive
-  trackWidth: number; // world units, distance between the two wheels
+  trackWidth: number; // metres, distance between the two wheels
   tickRate: number;   // sim steps per second (~60)
 }
 
@@ -30,7 +34,6 @@ export const DEFAULT_WORLD_CONFIG: WorldConfig = {
   width: 800,
   height: 600,
   maxSpeed: 100.0, // world units / s at full motor power — perceptible on canvas
-  maxAngularSpeed: Math.PI / 2, // radians / s at full differential — ~90° per turn state
   trackWidth: 0.5,
   tickRate: 60,
 };
@@ -55,7 +58,6 @@ export class WorldModel {
 
   private readonly dt: number;
   private readonly maxSpeed: number;
-  private readonly maxAngularSpeed: number;
   private readonly trackWidth: number;
 
   public pose: RobotPose;
@@ -74,24 +76,24 @@ export class WorldModel {
     this.obstacles = [...obstacles];
     this.dt = 1 / config.tickRate;
     this.maxSpeed = config.maxSpeed;
-    this.maxAngularSpeed = config.maxAngularSpeed;
     this.trackWidth = config.trackWidth;
     this.pose = { ...startPose };
   }
 
   // Apply one tick of differential-drive motion with the given motor powers.
   // Returns flags indicating whether either axis was clamped at a box edge
-  // (stop-dead collision) and whether the robot came into contact with an
-  // obstacle (stop-dead before penetration).
+  // and whether the robot came into contact with an obstacle or box edge
+  // (stop-dead collision response).
   apply(left: number, right: number): { clampedX: boolean; clampedY: boolean; collided: boolean } {
     const l = clamp(left, -1, 1);
     const r = clamp(right, -1, 1);
 
-    const linear = ((l + r) / 2) * this.maxSpeed;            // world units / s
-    let angular = ((r - l) / this.trackWidth) * this.maxSpeed; // radians / s
-    // Cap angular velocity independently so full differential drive turns at a
-    // sane rate (~90°/s) even when linear speed is high.
-    angular = clamp(angular, -this.maxAngularSpeed, this.maxAngularSpeed);
+    // Wheel powers become m/s; angular rate is then physical (rad/s). Linear
+    // speed is converted back to world units/s so travel speeds are unchanged.
+    const vLeft = (l * this.maxSpeed) / WORLD_UNITS_PER_METRE;
+    const vRight = (r * this.maxSpeed) / WORLD_UNITS_PER_METRE;
+    const linear = ((vLeft + vRight) / 2) * WORLD_UNITS_PER_METRE; // world units / s
+    const angular = (vRight - vLeft) / this.trackWidth;            // radians / s
 
     const newHeading = this.pose.heading + angular * this.dt;
     // Integrate translation at the midpoint heading for smoother curves.
@@ -136,15 +138,12 @@ export class WorldModel {
     if (ny < this.minY) { ny = this.minY; clampedY = true; }
     else if (ny > this.maxY) { ny = this.maxY; clampedY = true; }
 
+    // Boundary clamping is a collision too: the sim log keys off `collided`
+    // and must not claim "obstacle/boundary" when only a box edge was hit.
+    if (clampedX || clampedY) collided = true;
+
     this.pose = { x: nx, y: ny, heading: newHeading };
     return { clampedX, clampedY, collided };
-  }
-
-  // Zero out translational motion at the current pose (used after a clamp if
-  // callers want explicit stop-dead semantics beyond position clamping).
-  stopTranslation() {
-    // Position clamping in apply() already enforces stop-dead; this is a hook
-    // for future explicit velocity state. Kept for API symmetry.
   }
 
   // Distance from the ray origin along the front-facing ray (given by heading,
@@ -170,8 +169,11 @@ export class WorldModel {
 // The ray is p(t) = (ox, oy) + t * (dirX, dirY) for t >= 0. The box is centred
 // at (box.x, box.y) with full width/height box.width/box.height.
 //
-// Returns the distance t to the nearest hit (t >= 0), or null if the ray misses
-// the box. A distance of 0 means the origin is already inside the box.
+// Returns the distance t to the nearest entry face in front of the origin, or
+// null if the ray misses the box. An origin on/inside the box that is moving
+// outward has no entry face ahead, so it reports null rather than a hit at t=0
+// (a t=0 hit used to freeze a robot sitting against a wall). An origin exactly
+// on a face and pointing back into the box is a genuine t=0 contact.
 export function rayVsAxisAlignedBox(
   ox: number,
   oy: number,
@@ -179,8 +181,11 @@ export function rayVsAxisAlignedBox(
   dirY: number,
   box: Obstacle,
 ): number | null {
+  const DIR_EPS = 1e-12;
+  const BOUND_EPS = 1e-9;
+
   // Degenerate direction (not a real ray) — nothing to hit.
-  if (Math.abs(dirX) < 1e-12 && Math.abs(dirY) < 1e-12) {
+  if (Math.abs(dirX) < DIR_EPS && Math.abs(dirY) < DIR_EPS) {
     return null;
   }
 
@@ -189,30 +194,51 @@ export function rayVsAxisAlignedBox(
   const minY = box.y - box.height / 2;
   const maxY = box.y + box.height / 2;
 
-  let tMin = 0;
-  let tMax = Infinity;
+  let tEnter = -Infinity;
+  let tExit = Infinity;
+  // Whether the origin is inside (or within BOUND_EPS of) every slab.
+  let insideAllSlabs = true;
+  // An origin on a face pointing back into the box really is entering at t=0.
+  let enteringFromFace = false;
 
   const slab = (origin: number, min: number, max: number, dir: number): boolean => {
-    if (Math.abs(dir) < 1e-12) {
-      // Parallel to this axis: the ray hits only if the origin already lies
-      // inside the slab (no entry/exit constraint on t).
-      return origin >= min && origin <= max;
+    if (Math.abs(dir) < DIR_EPS) {
+      // Parallel to this axis: the ray stays in the slab only if the origin is
+      // inside it (a point on the face counts as inside, epsilon included).
+      return origin >= min - BOUND_EPS && origin <= max + BOUND_EPS;
     }
     const t1 = (min - origin) / dir;
     const t2 = (max - origin) / dir;
-    tMin = Math.max(tMin, Math.min(t1, t2));
-    tMax = Math.min(tMax, Math.max(t1, t2));
-    return tMin <= tMax;
+    tEnter = Math.max(tEnter, Math.min(t1, t2));
+    tExit = Math.min(tExit, Math.max(t1, t2));
+
+    if (origin < min - BOUND_EPS || origin > max + BOUND_EPS) {
+      insideAllSlabs = false;
+    }
+    if (origin <= min && origin >= min - BOUND_EPS && dir > DIR_EPS) {
+      enteringFromFace = true;
+    }
+    if (origin >= max && origin <= max + BOUND_EPS && dir < -DIR_EPS) {
+      enteringFromFace = true;
+    }
+    return true;
   };
 
   if (!slab(ox, minX, maxX, dirX)) return null;
   if (!slab(oy, minY, maxY, dirY)) return null;
 
-  // The box occupies ray parameters [tMin, tMax]. The nearest hit at or in
-  // front of the origin is max(tMin, 0). A negative tMax means the box is
-  // entirely behind the ray.
-  if (tMax < 0) return null;
-  return Math.max(tMin, 0);
+  // No common slab interval, or the whole box lies behind the ray.
+  if (tEnter > tExit + BOUND_EPS || tExit < -BOUND_EPS) return null;
+
+  if (insideAllSlabs && !enteringFromFace) {
+    // Origin on/inside the box, moving outward (or grazing along a face):
+    // there is no entry hit ahead, and certainly not one at t=0.
+    return null;
+  }
+
+  // Normal entry in front of the origin, or a genuine re-entry from a face.
+  // Normalise -0 to +0 so callers never see a negative-distance contact.
+  return tEnter > BOUND_EPS ? tEnter : 0;
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -230,17 +256,17 @@ export interface LoadedWorld {
   obstacles: Obstacle[];
 }
 
-// Load and parse a world JSON file (see specs/WORLD_FORMAT.md iteration 2).
+// Parse and validate the contents of a world JSON file (see
+// specs/WORLD_FORMAT.md iteration 2). Kept separate from the file read so
+// validation can be tested without filesystem I/O.
 //
 // Width/height build a WorldConfig that keeps every other field from
-// DEFAULT_WORLD_CONFIG. The robot block becomes the start pose. Obstacles are
-// optional; a missing or empty obstacles list yields an empty world.
-//
-// Throws if the file cannot be read, is not valid JSON, or does not conform to
-// the format — callers (e.g. the server entry point) are expected to catch and
-// fall back to defaults rather than crash.
-export function loadWorldFile(filePath: string): LoadedWorld {
-  const raw = fs.readFileSync(filePath, "utf8");
+// DEFAULT_WORLD_CONFIG. Obstacles are parsed before the robot pose so the
+// start pose can be validated against them. A missing or empty obstacles list
+// yields an empty world. Throws with the file path in the message on any
+// invalid input — callers (e.g. the server entry point) are expected to catch
+// and fall back to defaults rather than crash.
+export function parseWorld(raw: string, filePath: string): LoadedWorld {
   const parsed = JSON.parse(raw);
 
   if (!isObject(parsed)) {
@@ -259,19 +285,6 @@ export function loadWorldFile(filePath: string): LoadedWorld {
     width,
     height,
   };
-
-  const robot = (parsed as { robot: unknown }).robot;
-  if (
-    !isObject(robot) ||
-    !isFiniteNumber(robot.x) ||
-    !isFiniteNumber(robot.y) ||
-    !isFiniteNumber(robot.heading)
-  ) {
-    throw new Error(
-      `world file "${filePath}": robot must be { x, y, heading } numbers`,
-    );
-  }
-  const startPose: RobotPose = { x: robot.x, y: robot.y, heading: robot.heading };
 
   const obstacles: Obstacle[] = [];
   const rawObstacles = (parsed as { obstacles: unknown }).obstacles;
@@ -297,5 +310,50 @@ export function loadWorldFile(filePath: string): LoadedWorld {
     }
   }
 
+  const robot = (parsed as { robot: unknown }).robot;
+  if (
+    !isObject(robot) ||
+    !isFiniteNumber(robot.x) ||
+    !isFiniteNumber(robot.y) ||
+    !isFiniteNumber(robot.heading)
+  ) {
+    throw new Error(
+      `world file "${filePath}": robot must be { x, y, heading } numbers`,
+    );
+  }
+  const startPose: RobotPose = { x: robot.x, y: robot.y, heading: robot.heading };
+
+  const minX = -width / 2;
+  const maxX = width / 2;
+  const minY = -height / 2;
+  const maxY = height / 2;
+  if (startPose.x < minX || startPose.x > maxX || startPose.y < minY || startPose.y > maxY) {
+    throw new Error(
+      `world file "${filePath}": start pose (${startPose.x}, ${startPose.y}) is outside the box ` +
+        `x[${minX},${maxX}] y[${minY},${maxY}]`,
+    );
+  }
+
+  // A point on a face is allowed (that is where stop-dead contact leaves the
+  // robot); only a start strictly inside an obstacle is unsafe.
+  for (let i = 0; i < obstacles.length; i++) {
+    const obs = obstacles[i];
+    if (
+      startPose.x > obs.x - obs.width / 2 &&
+      startPose.x < obs.x + obs.width / 2 &&
+      startPose.y > obs.y - obs.height / 2 &&
+      startPose.y < obs.y + obs.height / 2
+    ) {
+      throw new Error(
+        `world file "${filePath}": start pose (${startPose.x}, ${startPose.y}) is inside obstacle[${i}]`,
+      );
+    }
+  }
+
   return { config, startPose, obstacles };
+}
+
+// Read and validate a world JSON file (see specs/WORLD_FORMAT.md iteration 2).
+export function loadWorldFile(filePath: string): LoadedWorld {
+  return parseWorld(fs.readFileSync(filePath, "utf8"), filePath);
 }

@@ -32,7 +32,11 @@ public final class ComponentRegistry {
         components.put(id, Objects.requireNonNull(c, "component"));
     }
 
-    /** Return the component bound to {@code id}, or {@code null} if none is bound. */
+    /**
+     * Return the component bound to {@code id}, or {@code null} if none is bound.
+     * This is the only lenient lookup: {@link #wheel(String)} and
+     * {@link #sensor(String)} fail fast instead of returning {@code null}.
+     */
     public Component component(String id) {
         return components.get(id);
     }

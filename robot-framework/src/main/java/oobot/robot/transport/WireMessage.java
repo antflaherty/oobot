@@ -8,8 +8,12 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
  * property to select the concrete record when deserialising an NDJSON line.
  *
  * <p>Wire format: {@code {"type":"...", "seq":N, "simTick":N, "payload":{...}}}
+ * with the fields in exactly that order (see {@code specs/WIRE_PROTOCOL.md}).
  */
-@JsonTypeInfo(use = JsonTypeInfo.Id.NAME, property = "type")
+@JsonTypeInfo(
+        use = JsonTypeInfo.Id.NAME,
+        include = JsonTypeInfo.As.EXISTING_PROPERTY,
+        property = "type")
 @JsonSubTypes({
     @JsonSubTypes.Type(value = ComponentCommandMessage.class, name = "componentCommand"),
     @JsonSubTypes.Type(value = ComponentSnapshotMessage.class, name = "componentSnapshot")

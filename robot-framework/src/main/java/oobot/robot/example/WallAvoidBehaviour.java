@@ -23,7 +23,7 @@ import oobot.robot.student.ProximitySensor;
  * obstacles the robot drives forward until it nears a box edge.
  * <p>
  * Commands {@link Mover} only: no motor power values are visible here — the
- * {@link oobot.robot.bridge.sim.SimWheeledMover} implementation handles the
+ * {@link oobot.robot.example.WheeledMover} implementation handles the
  * per-wheel translation. This is the decoupling boundary in action.
  */
 public class WallAvoidBehaviour implements RobotBehaviour {

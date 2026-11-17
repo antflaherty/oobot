@@ -50,6 +50,16 @@ function isJsonObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+// Clone the payload one level so a queued envelope never aliases the caller's
+// object. Combined with the fresh envelope in TransportConnection.send(), this
+// lets broadcast() hand the same envelope to several connections without their
+// per-connection seq values overwriting one another.
+function freshPayload(payload: unknown): unknown {
+  if (Array.isArray(payload)) return payload.slice();
+  if (isJsonObject(payload)) return { ...payload };
+  return payload;
+}
+
 function parseIncoming(line: string): IncomingEnvelope | null {
   let parsed: unknown;
   try {
@@ -125,11 +135,17 @@ class TransportConnection {
   }
 
   // Send one envelope to this connection. Non-blocking, fire and forget.
-  // Per-connection seq is assigned here (sender's sequence, per connection).
+  // Never mutate the caller's envelope: a clone (with a fresh payload) carries
+  // this connection's own seq, so fan-out to N connections yields N independent
+  // monotonic sequences.
   send(envelope: OutgoingEnvelope): void {
     if (this.closed || this.ws.readyState !== WebSocket.OPEN) return;
-    envelope.seq = this.outgoingSeq++;
-    this.pending = envelope; // drop-oldest: newest replaces unpublished
+    const outgoing: OutgoingEnvelope = {
+      ...envelope,
+      seq: this.outgoingSeq++,
+      payload: freshPayload(envelope.payload),
+    };
+    this.pending = outgoing; // drop-oldest: newest replaces unpublished
     if (!this.sending) {
       this.flush();
     }
@@ -211,7 +227,7 @@ export class WebSocketTransport implements Transport {
     conn.onLine = (line: string) => {
       const envelope = parseIncoming(line);
       if (envelope && this.handlers) {
-        this.handlers.onMessage(connectionId, envelope);
+        this.handlers.onMessage(connectionId, channel, envelope);
       }
     };
 

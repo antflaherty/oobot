@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 2,
+  "name": "two-left-wheels",
+  "components": [
+    { "id": "left-wheel-a", "type": "wheel",           "angle":  1.5707963267948966, "offset": 0.25 },
+    { "id": "left-wheel-b", "type": "wheel",           "angle":  1.5707963267948966, "offset": 0.25 },
+    { "id": "right-wheel",  "type": "wheel",           "angle": -1.5707963267948966, "offset": 0.25 },
+    { "id": "front-sensor", "type": "proximitySensor", "angle": 0.0 }
+  ]
+}

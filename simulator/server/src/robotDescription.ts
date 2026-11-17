@@ -39,6 +39,13 @@ function fail(path: string, problem: string): never {
   throw new Error(`${path}: ${problem}`);
 }
 
+// JSON.parse normalises numeric literals ("2.0" and "2" both become the number
+// 2), so the raw source token is inspected to enforce the integer literal 2.
+function hasIntegerSchemaVersionLiteral(raw: string): boolean {
+  const match = /"schemaVersion"\s*:\s*(-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?)/.exec(raw);
+  return match !== null && match[1] === '2';
+}
+
 export function loadRobotDescription(path: string): RobotDescription {
   let raw: string;
   try {
@@ -59,11 +66,11 @@ export function loadRobotDescription(path: string): RobotDescription {
   }
 
   const description = parsed as Record<string, unknown>;
-  if (description.schemaVersion !== 2) {
-    return fail(path, 'schemaVersion must be 2');
+  if (description.schemaVersion !== 2 || !hasIntegerSchemaVersionLiteral(raw)) {
+    return fail(path, 'schemaVersion must be the integer literal 2');
   }
-  if (typeof description.name !== 'string') {
-    return fail(path, 'name must be a string');
+  if (typeof description.name !== 'string' || description.name.trim().length === 0) {
+    return fail(path, 'name must be a non-blank string');
   }
   if (!Array.isArray(description.components)) {
     return fail(path, 'components must be an array');
@@ -75,19 +82,19 @@ export function loadRobotDescription(path: string): RobotDescription {
   const components: ComponentDescription[] = [];
 
   for (const [index, value] of items.entries()) {
-    const at = `components[${index}]`;
+    const at = `component[${index}]`;
 
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       return fail(path, `${at} must be an object`);
     }
     const component = value as Record<string, unknown>;
 
-    if (typeof component.id !== 'string' || component.id.length === 0) {
-      return fail(path, `${at}.id must be a non-empty string`);
+    if (typeof component.id !== 'string' || component.id.trim().length === 0) {
+      return fail(path, `${at}.id must be a non-blank string`);
     }
     const id = component.id;
     if (ids.has(id)) {
-      return fail(path, `duplicate component id "${id}"`);
+      return fail(path, `${at}: duplicate component id "${id}"`);
     }
     ids.add(id);
 
@@ -127,7 +134,7 @@ export function loadRobotDescription(path: string): RobotDescription {
         );
       }
       if (wheelCounts[role] > 0) {
-        return fail(path, `more than one wheel derived as "${role}" (id "${id}")`);
+        return fail(path, `${at}: more than one wheel derived as "${role}" (id "${id}")`);
       }
       wheelCounts[role]++;
 

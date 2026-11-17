@@ -1,5 +1,6 @@
 package oobot.robot.bridge.sim;
 
+import oobot.robot.description.RobotDescription;
 import oobot.robot.student.Wheel;
 
 /**
@@ -33,12 +34,17 @@ class SimWheel implements Wheel {
 
     @Override
     public void clockwise() {
-        apply(Math.sin(angle) > 0 ? 1.0 : -1.0);
+        apply(isLeft() ? 1.0 : -1.0);
     }
 
     @Override
     public void antiClockwise() {
-        apply(Math.sin(angle) > 0 ? -1.0 : 1.0);
+        apply(isLeft() ? -1.0 : 1.0);
+    }
+
+    /** Left/right roles use the same threshold the manifest loader enforces. */
+    private boolean isLeft() {
+        return Math.sin(angle) > RobotDescription.WHEEL_ROLE_LATERAL_THRESHOLD;
     }
 
     @Override

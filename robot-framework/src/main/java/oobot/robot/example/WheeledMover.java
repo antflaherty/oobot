@@ -1,5 +1,6 @@
 package oobot.robot.example;
 
+import oobot.robot.description.RobotDescription;
 import oobot.robot.student.Mover;
 import oobot.robot.student.Wheel;
 
@@ -25,8 +26,11 @@ public class WheeledMover implements Mover {
 
     /**
      * Create a mover from the manifest wheels. Roles are derived from mount
-     * angle: positive lateral position ({@code sin(angle) > 0}) is left, and
-     * the other wheel is right.
+     * angle with the same threshold the manifest loader uses:
+     * {@code sin(angle) > 0.9} is left, {@code sin(angle) < -0.9} is right.
+     *
+     * @throws IllegalArgumentException if the list does not contain exactly one
+     *         left and one right wheel
      */
     public WheeledMover(List<Wheel> wheels) {
         Objects.requireNonNull(wheels, "wheels");
@@ -37,13 +41,30 @@ public class WheeledMover implements Mover {
 
         Wheel first = Objects.requireNonNull(wheels.get(0), "wheel");
         Wheel second = Objects.requireNonNull(wheels.get(1), "wheel");
-        if (Math.sin(first.angle()) > 0) {
-            this.left = first;
-            this.right = second;
-        } else {
-            this.left = second;
-            this.right = first;
+        Role firstRole = roleOf(first);
+        Role secondRole = roleOf(second);
+        if (firstRole == Role.INVALID || secondRole == Role.INVALID || firstRole == secondRole) {
+            throw new IllegalArgumentException(
+                    "WheeledMover requires exactly one left and one right wheel "
+                    + "(sin(angle) > " + RobotDescription.WHEEL_ROLE_LATERAL_THRESHOLD
+                    + " or sin(angle) < -" + RobotDescription.WHEEL_ROLE_LATERAL_THRESHOLD + ")");
         }
+        boolean firstLeft = firstRole == Role.LEFT;
+        this.left = firstLeft ? first : second;
+        this.right = firstLeft ? second : first;
+    }
+
+    private enum Role { LEFT, RIGHT, INVALID }
+
+    private static Role roleOf(Wheel wheel) {
+        double lateral = Math.sin(wheel.angle());
+        if (lateral > RobotDescription.WHEEL_ROLE_LATERAL_THRESHOLD) {
+            return Role.LEFT;
+        }
+        if (lateral < -RobotDescription.WHEEL_ROLE_LATERAL_THRESHOLD) {
+            return Role.RIGHT;
+        }
+        return Role.INVALID;
     }
 
     @Override
@@ -54,6 +75,7 @@ public class WheeledMover implements Mover {
         right.antiClockwise();
     }
 
+    /** Move backward at full speed: left anti-clockwise, right clockwise. */
     @Override
     public void backward() {
         left.antiClockwise();

@@ -17,7 +17,7 @@ import oobot.robot.student.ProximitySensor;
  * <p>
  * Commands {@link Mover} only: {@code forward()} on FORWARD ticks,
  * {@code turnRight()} on TURN ticks. No motor power values are visible to
- * this class — the {@link oobot.robot.bridge.sim.SimWheeledMover}
+ * this class — the {@link oobot.robot.example.WheeledMover}
  * implementation handles the per-wheel translation. This is the decoupling
  * boundary in action.
  * <p>

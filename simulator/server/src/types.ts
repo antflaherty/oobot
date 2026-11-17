@@ -26,7 +26,7 @@ export interface TransportOptions {
 
 export interface Handlers {
   onConnect: (connectionId: string, channel: Channel) => void;
-  onMessage: (connectionId: string, envelope: IncomingEnvelope) => void;
+  onMessage: (connectionId: string, channel: Channel, envelope: IncomingEnvelope) => void;
   onDisconnect: (connectionId: string, channel: Channel) => void;
 }
 

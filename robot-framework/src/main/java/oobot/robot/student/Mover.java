@@ -5,7 +5,7 @@ package oobot.robot.student;
  * <p>
  * Robot behaviour code commands movement through {@link Mover} without any
  * knowledge of motors, power levels, wheel mounting, or differential drive. A
- * concrete implementation (e.g. {@link oobot.robot.WheeledMover}) translates
+ * concrete implementation (e.g. {@link oobot.robot.example.WheeledMover}) translates
  * high-level commands into per-wheel rotations.
  * <p>
  * This is the decoupling boundary: behaviour code knows <em>what</em> to do

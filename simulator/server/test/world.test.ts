@@ -1,19 +1,25 @@
-// Characterization tests for today's WorldModel behaviour.
-//
-// These assertions deliberately pin the current kinematics (saturated angular
-// rate, boundary-only clamped flags) so S1.1 can change them on purpose rather
-// than by accident. Update this file as part of S1.1 when the physics is fixed.
-// These are pure model tests: no sockets and no file I/O.
+// Focused tests for the hardened WorldModel behaviour and world-file
+// validation (D-1, collision ray fix, spawn validation). Pure model tests:
+// no sockets and no file I/O.
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { DEFAULT_WORLD_CONFIG, WorldModel } from "../src/world";
+import {
+  DEFAULT_WORLD_CONFIG,
+  WORLD_UNITS_PER_METRE,
+  WorldModel,
+  parseWorld,
+  rayVsAxisAlignedBox,
+} from "../src/world";
 
 const TOLERANCE = 1e-9;
 const STEP = DEFAULT_WORLD_CONFIG.maxSpeed / DEFAULT_WORLD_CONFIG.tickRate; // 100 / 60
-const SATURATED_TURN_STEP =
-  DEFAULT_WORLD_CONFIG.maxAngularSpeed / DEFAULT_WORLD_CONFIG.tickRate;
+const FULL_TURN_RATE =
+  (2 * DEFAULT_WORLD_CONFIG.maxSpeed) /
+  WORLD_UNITS_PER_METRE /
+  DEFAULT_WORLD_CONFIG.trackWidth; // 4 rad/s with the default config
+const FULL_TURN_STEP = FULL_TURN_RATE / DEFAULT_WORLD_CONFIG.tickRate;
 
 function approx(actual: number, expected: number, label: string): void {
   assert.ok(
@@ -52,7 +58,7 @@ test("equal left/right powers drive straight at proportional speed", () => {
   approx(reverse.pose.heading, 0, "full-reverse heading");
 });
 
-test("symmetric left/right differentials produce mirror-image saturated turns", () => {
+test("differential drive turns proportionally to wheel-power difference", () => {
   const turnLeft = new WorldModel();
   turnLeft.apply(-1, 1);
   const turnRight = new WorldModel();
@@ -62,18 +68,42 @@ test("symmetric left/right differentials produce mirror-image saturated turns", 
   approx(turnLeft.pose.y, 0, "pure-turn y (left)");
   approx(turnRight.pose.x, 0, "pure-turn x (right)");
   approx(turnRight.pose.y, 0, "pure-turn y (right)");
-  approx(turnLeft.pose.heading, SATURATED_TURN_STEP, "pure-turn heading (left)");
-  approx(turnRight.pose.heading, -SATURATED_TURN_STEP, "pure-turn heading (right)");
+  approx(FULL_TURN_RATE, 4, "full-differential rate");
+  approx(turnLeft.pose.heading, FULL_TURN_STEP, "pure-turn heading (left)");
+  approx(turnRight.pose.heading, -FULL_TURN_STEP, "pure-turn heading (right)");
 
-  // Today even a small differential saturates the independent angular clamp.
+  const halfDifferential = new WorldModel();
+  halfDifferential.apply(-0.5, 0.5);
+  approx(halfDifferential.pose.heading, FULL_TURN_STEP / 2, "half-differential heading");
+
   const smallDifferential = new WorldModel();
   smallDifferential.apply(-0.05, 0.05);
-  approx(smallDifferential.pose.x, 0, "small-differential x");
-  approx(smallDifferential.pose.y, 0, "small-differential y");
   approx(
     smallDifferential.pose.heading,
-    SATURATED_TURN_STEP,
+    (FULL_TURN_RATE * 0.05) / DEFAULT_WORLD_CONFIG.tickRate,
     "small-differential heading",
+  );
+});
+
+test("angular rate follows the metre-based formula with no independent clamp", () => {
+  assert.equal(WORLD_UNITS_PER_METRE, 100);
+  const leftPower = -0.8;
+  const rightPower = 0.3;
+  const world = new WorldModel();
+  world.apply(leftPower, rightPower);
+
+  const vLeft = (leftPower * DEFAULT_WORLD_CONFIG.maxSpeed) / WORLD_UNITS_PER_METRE;
+  const vRight = (rightPower * DEFAULT_WORLD_CONFIG.maxSpeed) / WORLD_UNITS_PER_METRE;
+  const expectedAngular =
+    (vRight - vLeft) / DEFAULT_WORLD_CONFIG.trackWidth / DEFAULT_WORLD_CONFIG.tickRate;
+  const expectedTravel =
+    Math.abs(((vLeft + vRight) / 2) * WORLD_UNITS_PER_METRE) / DEFAULT_WORLD_CONFIG.tickRate;
+
+  approx(world.pose.heading, expectedAngular, "angular rate from D-1 formula");
+  approx(Math.hypot(world.pose.x, world.pose.y), expectedTravel, "linear travel unchanged");
+  assert.ok(
+    Math.abs(world.pose.heading) > Math.PI / 2 / DEFAULT_WORLD_CONFIG.tickRate,
+    "rate exceeds the removed maxAngularSpeed clamp",
   );
 });
 
@@ -156,7 +186,107 @@ for (const edge of edgeCases) {
     assert.equal(flags[edge.clampedAxis], true, `${edge.label} clamped flag`);
     const otherAxis = edge.clampedAxis === "clampedX" ? "clampedY" : "clampedX";
     assert.equal(flags[otherAxis], false, `${edge.label} other axis not clamped`);
-    // Today only obstacles set collided; S1.1 may deliberately change this.
-    assert.equal(flags.collided, false, `${edge.label} collided flag`);
+    assert.equal(flags.collided, true, `${edge.label} reports a boundary collision`);
   });
 }
+
+// Box spans x[9, 11], y[-10, 10].
+const wall = { x: 10, y: 0, width: 2, height: 20 };
+
+test("ray from a box face moving outward has no hit; inward is a t=0 contact", () => {
+  assert.equal(rayVsAxisAlignedBox(9, 0, -1, 0, wall), null);
+  assert.equal(rayVsAxisAlignedBox(11, 0, 1, 0, wall), null);
+
+  const inward = rayVsAxisAlignedBox(9, 0, 1, 0, wall);
+  assert.equal(inward, 0);
+  assert.equal(Object.is(inward, -0), false, "contact distance is positive zero");
+});
+
+test("ray starting inside a box moving outward has no hit", () => {
+  assert.equal(rayVsAxisAlignedBox(10, 0, 1, 0, wall), null);
+  assert.equal(rayVsAxisAlignedBox(10, 0, -1, 0, wall), null);
+});
+
+test("epsilon-crossing at a face does not create a spurious hit", () => {
+  assert.equal(rayVsAxisAlignedBox(9 - 1e-10, 0, -1, 0, wall), null);
+  assert.equal(rayVsAxisAlignedBox(11 + 1e-10, 0, 1, 0, wall), null);
+  assert.equal(rayVsAxisAlignedBox(9, 0, 0, 1, wall), null, "grazing along a face");
+});
+
+test("ray from outside hits the near face", () => {
+  const hit = rayVsAxisAlignedBox(5, 0, 1, 0, wall);
+  assert.ok(hit !== null, "expected a hit");
+  approx(hit, 4, "near face distance");
+});
+
+test("robot backed away from a wall translates on the first tick after contact", () => {
+  const world = new WorldModel(DEFAULT_WORLD_CONFIG, { x: 0, y: 0, heading: 0 }, [wall]);
+  let flags = world.apply(1, 1);
+  for (let tick = 0; tick < 100 && !flags.collided; tick++) {
+    flags = world.apply(1, 1);
+  }
+  assert.equal(flags.collided, true, "forward motion eventually hits the wall");
+  approx(world.pose.x, 9, "pose at the wall face");
+
+  const reverseFlags = world.apply(-1, -1);
+  approx(world.pose.x, 9 - STEP, "x after one reverse tick");
+  assert.equal(reverseFlags.collided, false, "backing away is not a collision");
+});
+
+const WORLD_PATH = "/worlds/test-world.json";
+
+function worldJson(robot: unknown, obstacles: unknown = []): string {
+  return JSON.stringify({ width: 800, height: 600, robot, obstacles });
+}
+
+function validationError(raw: string): string {
+  try {
+    parseWorld(raw, WORLD_PATH);
+  } catch (err) {
+    return err instanceof Error ? err.message : String(err);
+  }
+  assert.fail("expected parseWorld to reject the world");
+}
+
+test("world loader accepts a start pose inside the box and outside obstacles", () => {
+  const loaded = parseWorld(
+    worldJson({ x: 0, y: 0, heading: 0 }, [{ x: 10, y: 0, width: 2, height: 2 }]),
+    WORLD_PATH,
+  );
+  assert.deepEqual(loaded.startPose, { x: 0, y: 0, heading: 0 });
+  assert.equal(loaded.config.width, 800);
+  assert.equal(loaded.obstacles.length, 1);
+});
+
+test("world loader accepts a start pose on an obstacle face", () => {
+  const loaded = parseWorld(
+    worldJson({ x: 9, y: 0, heading: 0 }, [wall]),
+    WORLD_PATH,
+  );
+  assert.deepEqual(loaded.startPose, { x: 9, y: 0, heading: 0 });
+});
+
+test("world loader rejects a start pose outside the box", () => {
+  const message = validationError(worldJson({ x: 500, y: 0, heading: 0 }));
+  assert.ok(message.includes(WORLD_PATH), `error names the world file: ${message}`);
+  assert.ok(message.includes("outside the box"), `error explains the problem: ${message}`);
+});
+
+test("world loader rejects a start pose inside an obstacle", () => {
+  const message = validationError(
+    worldJson({ x: 10, y: 0, heading: 0 }, [wall]),
+  );
+  assert.ok(message.includes(WORLD_PATH), `error names the world file: ${message}`);
+  assert.ok(message.includes("obstacle[0]"), `error names the obstacle: ${message}`);
+});
+
+test("obstacles are validated before the start pose", () => {
+  const raw = JSON.stringify({
+    width: 800,
+    height: 600,
+    robot: { x: 500, y: 0, heading: 0 },
+    obstacles: [{ x: 10, y: 0, width: -2, height: 2 }],
+  });
+  const message = validationError(raw);
+  assert.ok(message.includes("each obstacle must"), `obstacle error wins: ${message}`);
+});

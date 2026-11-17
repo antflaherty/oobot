@@ -38,11 +38,35 @@ interface BufferedSnapshot {
   receivedAt: number; // now() when received
 }
 
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+/** Narrow a parsed NDJSON line to a snapshot whose fields are safe to render. */
+function isValidSnapshot(value: unknown): value is WorldSnapshot {
+  if (typeof value !== 'object' || value === null) return false;
+  const msg = value as {
+    type?: unknown;
+    simTick?: unknown;
+    payload?: { robot?: { x?: unknown; y?: unknown; heading?: unknown } };
+  };
+  if (msg.type !== 'worldSnapshot' || !isFiniteNumber(msg.simTick)) return false;
+  const robot = msg.payload?.robot;
+  return (
+    !!robot &&
+    isFiniteNumber(robot.x) &&
+    isFiniteNumber(robot.y) &&
+    isFiniteNumber(robot.heading)
+  );
+}
+
 export class LiveStream {
   private ws: WebSocket | null = null;
   private snapshots: BufferedSnapshot[] = []; // sorted by simTick ascending
   private latestTick = -1;
   private connected = false;
+  /** Cleared by stop() before closing so onclose cannot schedule a reconnect. */
+  private shouldReconnect = false;
   private reconnectTimer: number | null = null;
   private latestObstacles: Obstacle[] = [];
   private onTrailPoint: ((x: number, y: number) => void) | null = null;
@@ -70,18 +94,24 @@ export class LiveStream {
   }
 
   start(): void {
+    this.shouldReconnect = true;
     this.connect();
   }
 
   stop(): void {
+    // Clear the reconnect flag first: closing the socket fires onclose
+    // synchronously in some environments, and that must not schedule a new
+    // connection for a stream the caller intentionally stopped.
+    this.shouldReconnect = false;
     this.connected = false;
     if (this.reconnectTimer !== null) {
       this.cancelTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.ws) {
-      this.ws.close();
-      this.ws = null;
+    const ws = this.ws;
+    this.ws = null;
+    if (ws) {
+      ws.close();
     }
   }
 
@@ -184,6 +214,10 @@ export class LiveStream {
     this.ws = this.createWebSocket(url);
 
     this.ws.onopen = () => {
+      // Every connection (first or reconnect) starts from a clean slate:
+      // stale snapshots, interpolation clock, obstacles and trail must not
+      // carry over from a previous session.
+      this.reset();
       this.connected = true;
       console.log(`[visualiser] WebSocket connected to ${url}`);
     };
@@ -199,13 +233,21 @@ export class LiveStream {
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed) continue;
+        let msg: unknown;
         try {
-          const msg = JSON.parse(trimmed);
-          if (msg && msg.type === 'worldSnapshot') {
-            this.handleSnapshot(msg as WorldSnapshot);
-          }
+          msg = JSON.parse(trimmed);
         } catch {
-          // Malformed JSON: log and ignore (never crash/disconnect).
+          console.warn('[visualiser] ignoring malformed NDJSON line:', trimmed);
+          continue;
+        }
+        if (isValidSnapshot(msg)) {
+          this.handleSnapshot(msg);
+        } else if (
+          typeof msg === 'object' &&
+          msg !== null &&
+          (msg as { type?: unknown }).type === 'worldSnapshot'
+        ) {
+          console.warn('[visualiser] ignoring invalid worldSnapshot:', trimmed);
         }
       }
     };
@@ -213,6 +255,12 @@ export class LiveStream {
     this.ws.onclose = () => {
       this.connected = false;
       this.ws = null;
+      // Drop trail points recorded for the session that just ended.
+      this.onTrailReset?.();
+      if (!this.shouldReconnect) {
+        console.log('[visualiser] WebSocket closed; staying stopped');
+        return;
+      }
       console.log('[visualiser] WebSocket closed; reconnecting in 2s');
       this.scheduleReconnect();
     };
@@ -223,7 +271,7 @@ export class LiveStream {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer !== null) return;
+    if (!this.shouldReconnect || this.reconnectTimer !== null) return;
     this.reconnectTimer = this.scheduleTimeout(() => {
       this.reconnectTimer = null;
       this.connect();
@@ -231,6 +279,11 @@ export class LiveStream {
   }
 
   private handleSnapshot(snapshot: WorldSnapshot): void {
+    // A decreasing tick means the sim restarted. Drop the old session's state
+    // once, then apply this snapshot as the first frame of the new session.
+    if (snapshot.simTick < this.latestTick) {
+      this.reset();
+    }
     const buffered: BufferedSnapshot = {
       simTick: snapshot.simTick,
       pose: { ...snapshot.payload.robot },

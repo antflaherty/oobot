@@ -8,7 +8,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -19,13 +18,21 @@ public record RobotDescription(String name, List<ComponentDescription> component
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final double DEFAULT_WHEEL_OFFSET = 0.25;
-    private static final double LATERAL_ROLE_THRESHOLD = 0.9;
+
+    /**
+     * Magnitude of {@code sin(angle)} above which a wheel takes the left role
+     * (positive) or the right role (negative). Shared by the bridge and the
+     * example mover so every layer derives roles with the same rule.
+     */
+    public static final double WHEEL_ROLE_LATERAL_THRESHOLD = 0.9;
 
     /**
      * Read and validate a component manifest from {@code path}.
      *
      * @throws IllegalArgumentException if the file cannot be read or violates the
-     *                                  manifest schema; the message names the file and the problem.
+     *                                  manifest schema; the message names the file,
+     *                                  the {@code component[i]} index where applicable,
+     *                                  and the problem.
      */
     public static RobotDescription load(Path path) {
         JsonNode root;
@@ -59,70 +66,82 @@ public record RobotDescription(String name, List<ComponentDescription> component
         int leftWheels = 0;
         int rightWheels = 0;
 
-        for (JsonNode node : componentsNode) {
+        for (int i = 0; i < componentsNode.size(); i++) {
+            JsonNode node = componentsNode.get(i);
             if (!node.isObject()) {
-                throw problem(path, "each component must be a JSON object");
+                throw componentProblem(path, i, "must be a JSON object");
             }
 
             JsonNode idNode = node.get("id");
             if (idNode == null || !idNode.isTextual() || idNode.textValue().isBlank()) {
-                throw problem(path, "component id must be a non-empty string");
+                throw componentProblem(path, i, "id must be a non-empty string");
             }
             String id = idNode.textValue();
             if (!ids.add(id)) {
-                throw problem(path, "duplicate component id '" + id + "'");
+                throw componentProblem(path, i, "duplicate id '" + id + "'");
             }
 
             if (node.has("side")) {
-                throw problem(path, "component '" + id + "' must not declare 'side' in schemaVersion 2");
+                throw componentProblem(path, i,
+                        "component '" + id + "' must not declare 'side' in schemaVersion 2");
             }
 
             JsonNode typeNode = node.get("type");
             ComponentType type;
             if (typeNode == null || !typeNode.isTextual()) {
-                throw problem(path, "component '" + id + "' has a missing or non-string type");
+                throw componentProblem(path, i,
+                        "component '" + id + "' has a missing or non-string type");
             }
             try {
                 type = parseComponentType(typeNode.textValue());
             } catch (IllegalArgumentException e) {
-                throw problem(path, "component '" + id + "' has unknown type '" + typeNode.textValue() + "'");
+                throw componentProblem(path, i,
+                        "component '" + id + "' has unknown type '" + typeNode.textValue() + "'");
             }
 
             JsonNode angleNode = node.get("angle");
             if (angleNode == null || !angleNode.isNumber()) {
-                throw problem(path, "component '" + id + "' has a missing or non-numeric angle");
+                throw componentProblem(path, i,
+                        "component '" + id + "' has a missing or non-numeric angle");
             }
             double angle = angleNode.doubleValue();
             if (!Double.isFinite(angle)) {
-                throw problem(path, "component '" + id + "' has a non-finite angle");
+                throw componentProblem(path, i, "component '" + id + "' has a non-finite angle");
             }
 
             boolean hasOffset = node.has("offset");
-            double offset = DEFAULT_WHEEL_OFFSET;
+            // Sensors have no radial offset; only wheels default to one.
+            double offset = 0.0;
             if (type == ComponentType.PROXIMITY_SENSOR) {
                 if (hasOffset) {
-                    throw problem(path, "sensor '" + id + "' must not declare an offset");
+                    throw componentProblem(path, i,
+                            "sensor '" + id + "' must not declare an offset");
                 }
             } else { // WHEEL
+                offset = DEFAULT_WHEEL_OFFSET;
                 if (hasOffset) {
                     JsonNode offsetNode = node.get("offset");
                     if (!offsetNode.isNumber()) {
-                        throw problem(path, "wheel '" + id + "' has a non-numeric offset");
+                        throw componentProblem(path, i,
+                                "wheel '" + id + "' has a non-numeric offset");
                     }
                     offset = offsetNode.doubleValue();
                     if (!Double.isFinite(offset) || offset <= 0.0) {
-                        throw problem(path, "wheel '" + id + "' offset must be finite and > 0");
+                        throw componentProblem(path, i,
+                                "wheel '" + id + "' offset must be finite and > 0");
                     }
                 }
 
                 double lateral = Math.sin(angle);
-                if (lateral > LATERAL_ROLE_THRESHOLD) {
+                if (lateral > WHEEL_ROLE_LATERAL_THRESHOLD) {
                     leftWheels++;
-                } else if (lateral < -LATERAL_ROLE_THRESHOLD) {
+                } else if (lateral < -WHEEL_ROLE_LATERAL_THRESHOLD) {
                     rightWheels++;
                 } else {
-                    throw problem(path, "wheel '" + id + "' angle must place it on the left or right "
-                            + "(sin(angle) > 0.9 or sin(angle) < -0.9)");
+                    throw componentProblem(path, i,
+                            "wheel '" + id + "' angle must place it on the left or right "
+                            + "(sin(angle) > " + WHEEL_ROLE_LATERAL_THRESHOLD
+                            + " or sin(angle) < -" + WHEEL_ROLE_LATERAL_THRESHOLD + ")");
                 }
             }
 
@@ -137,16 +156,21 @@ public record RobotDescription(String name, List<ComponentDescription> component
         return new RobotDescription(name, List.copyOf(components));
     }
 
-    /** Accept the manifest's lowercase spellings as well as enum constant names. */
+    /** Accept only the exact schema spellings (same rule as the TypeScript loader). */
     private static ComponentType parseComponentType(String raw) {
-        return switch (raw.trim().toUpperCase(Locale.ROOT)) {
-            case "WHEEL" -> ComponentType.WHEEL;
-            case "PROXIMITY_SENSOR", "PROXIMITYSENSOR" -> ComponentType.PROXIMITY_SENSOR;
+        return switch (raw) {
+            case "wheel" -> ComponentType.WHEEL;
+            case "proximitySensor" -> ComponentType.PROXIMITY_SENSOR;
             default -> throw new IllegalArgumentException("unknown type: " + raw);
         };
     }
 
     private static IllegalArgumentException problem(Path path, String detail) {
         return new IllegalArgumentException("Invalid component manifest " + path + ": " + detail);
+    }
+
+    /** Component-scoped failures name both the manifest path and the array index. */
+    private static IllegalArgumentException componentProblem(Path path, int index, String detail) {
+        return problem(path, "component[" + index + "]: " + detail);
     }
 }

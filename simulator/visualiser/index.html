@@ -35,11 +35,12 @@
   </style>
 </head>
 <body>
-  <h1>oobot visualiser — MVP (hardcoded snapshot stream)</h1>
+  <h1>oobot visualiser — MVP (live sim with fallback)</h1>
   <canvas id="viz" width="800" height="600"></canvas>
   <p class="hint">
-    Hold-last-frame + interpolate-to-next (&bull; no extrapolation). No WebSocket,
-    no sim — vanilla TypeScript + canvas only.
+    Connects to the sim's live WebSocket channel and renders <code>worldSnapshot</code>
+    messages with hold-last-frame + interpolate-to-next (&bull; no extrapolation).
+    If no sim is connected, a hardcoded fallback demo plays instead.
   </p>
   <script type="module" src="/src/main.ts"></script>
 </body>

@@ -11,7 +11,7 @@
 
 import type { WorldSnapshot, RobotPose } from './types';
 import { SNAPSHOTS, FINAL_SNAPSHOT_TICK } from './snapshotStream';
-import { angleLerp } from './math';
+import { angleLerp, clamp01 } from './math';
 import { Renderer } from './renderer';
 import { LiveStream, PoseResult } from './liveStream';
 
@@ -33,10 +33,34 @@ liveStream.start();
 // Record trail points from the authoritative snapshot stream so the path keeps
 // tracing while the tab is hidden (render frames pause there).
 liveStream.setTrailPointCallback((x, y) => renderer.addTrailPoint(x, y));
+// LiveStream.reset() runs on every (re)connect and on a sim tick rollback.
+// Clear the renderer trail there too so two sessions are never joined by a
+// stray segment — see D-5 in docs/DECISIONS.md.
+liveStream.setTrailResetCallback(() => renderer.clearTrail());
 
-let startTime = performance.now();
-let lastLogTime = startTime;
+type PlaybackMode = 'live' | 'fallback';
+
+let activeMode: PlaybackMode | null = null;
+let fallbackStartTime = performance.now();
+let lastLogTime = fallbackStartTime;
 let framesRendered = 0;
+
+/**
+ * Switch between the authoritative live stream and the hardcoded fallback.
+ *
+ * The trail is cleared on every transition so a path recorded in one mode is
+ * never concatenated with one from the other. Entering fallback also rewinds
+ * the playback clock: otherwise a long live session leaves `fallbackStartTime`
+ * stale and the fallback jumps straight to its final, held keyframe.
+ */
+function setMode(next: PlaybackMode, now: number): void {
+  if (activeMode === next) return;
+  renderer.clearTrail();
+  if (next === 'fallback') {
+    fallbackStartTime = now;
+  }
+  activeMode = next;
+}
 
 /**
  * Interpolate between two snapshots bracketing `tick`.
@@ -68,7 +92,7 @@ function interpolate(
   }
 
   const span = to.simTick - from.simTick;
-  const s = span > 0 ? (tick - from.simTick) / span : 1;
+  const s = span > 0 ? clamp01((tick - from.simTick) / span) : 1;
 
   return {
     pose: {
@@ -105,7 +129,10 @@ function frame(): void {
   let source = 'none';
 
   const latestTick = liveStream.getLatestTick();
-  if (latestTick !== null && liveStream.isConnected()) {
+  const usingLive = liveStream.isConnected() && latestTick !== null;
+  setMode(usingLive ? 'live' : 'fallback', now);
+
+  if (usingLive) {
     const liveResult = liveStream.getPoseAt(now);
     if (liveResult) {
       result = liveResult;
@@ -113,7 +140,7 @@ function frame(): void {
       poseTick = latestTick;
     }
   } else {
-    const elapsedSec = (now - startTime) / 1000;
+    const elapsedSec = (now - fallbackStartTime) / 1000;
     const playbackTick = elapsedSec * TICKS_PER_SECOND;
     result = interpolate(SNAPSHOTS, playbackTick);
     source =
@@ -124,7 +151,7 @@ function frame(): void {
   if (result) {
     // Fallback hardcoded stream isn't fed through LiveStream, so record a trail
     // point per rendered frame here (live path is recorded via the callback above).
-    if (!liveStream.isConnected()) {
+    if (!usingLive) {
       renderer.addTrailPoint(result.pose.x, result.pose.y);
     }
 

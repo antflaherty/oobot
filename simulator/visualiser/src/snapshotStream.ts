@@ -32,24 +32,38 @@ export const MAZE_OBSTACLES = [
 // snapshots are spaced apart — which makes the visualiser's interpolation
 // between them clearly visible (motion, not snapping).
 //
-// heading: radians, 0 = +X axis (see specs/WIRE_PROTOCOL.md §6.2).
+// Every pose is inside the drawn world (x ∈ [-400,400], y ∈ [-300,300]) with
+// room for the robot body and heading arrow. Each segment is either a pure
+// translation at constant heading or a turn in place, so the arrow always
+// points along the direction of travel (or the robot is stationary).
+//
+// heading: radians, 0 = +X axis, + = CCW (see specs/WIRE_PROTOCOL.md §6.2).
 const KEYFRAMES: Array<{
   tick: number;
   x: number;
   y: number;
   heading: number;
 }> = [
-  { tick: 0, x: 100, y: 300, heading: 0 },
-  { tick: 40, x: 650, y: 300, heading: 0 },
-  { tick: 80, x: 650, y: 300, heading: Math.PI / 2 },
-  { tick: 120, x: 650, y: 100, heading: Math.PI / 2 },
-  { tick: 160, x: 650, y: 100, heading: Math.PI },
-  { tick: 200, x: 150, y: 100, heading: Math.PI },
-  { tick: 240, x: 150, y: 100, heading: (3 * Math.PI) / 2 },
-  { tick: 280, x: 150, y: 500, heading: (3 * Math.PI) / 2 },
-  { tick: 320, x: 150, y: 500, heading: 0 },
-  { tick: 360, x: 650, y: 500, heading: 0 },
-  { tick: 400, x: 650, y: 500, heading: Math.PI / 4 },
+  // Above wall 3, heading right (+X).
+  { tick: 0, x: -200, y: 210, heading: 0 },
+  { tick: 40, x: 300, y: 210, heading: 0 },
+  // Turn to face down (-Y), then pass through wall 3's right-hand gap.
+  { tick: 80, x: 300, y: 210, heading: -Math.PI / 2 },
+  { tick: 120, x: 300, y: 100, heading: -Math.PI / 2 },
+  // Turn to face left (-X), then cross the upper corridor.
+  { tick: 160, x: 300, y: 100, heading: Math.PI },
+  { tick: 200, x: -330, y: 100, heading: Math.PI },
+  // Turn down and use wall 2's left-hand gap (clear of the slalom sliver).
+  { tick: 240, x: -330, y: 100, heading: -Math.PI / 2 },
+  { tick: 280, x: -330, y: -135, heading: -Math.PI / 2 },
+  // Turn right (+X) below the central pillar, then down through wall 1's gap.
+  { tick: 320, x: -330, y: -135, heading: 0 },
+  { tick: 360, x: 320, y: -135, heading: 0 },
+  { tick: 400, x: 320, y: -135, heading: -Math.PI / 2 },
+  { tick: 440, x: 320, y: -210, heading: -Math.PI / 2 },
+  // Turn left (-X) and finish along the bottom of the box.
+  { tick: 480, x: 320, y: -210, heading: Math.PI },
+  { tick: 520, x: -200, y: -210, heading: Math.PI },
 ];
 
 // Emit one snapshot every N simTicks (~every 133ms at a 60Hz sim).

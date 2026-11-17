@@ -7,7 +7,7 @@ package oobot.robot.student;
  * clockwise or anti-clockwise at an unspecified static rate, or to stop.
  * {@code Wheel} has no concept of "forward" — that is a robot-level concept
  * determined by how the wheel is mounted on the chassis. Concrete
- * implementations (e.g. {@link oobot.robot.bridge.sim.SimWheel}) translate
+ * implementations (e.g. {@code oobot.robot.bridge.sim.SimWheel}) translate
  * clockwise/anti-clockwise into whatever the underlying hardware or sim
  * accepts, based on the wheel's mounting.
  * <p>
@@ -16,8 +16,8 @@ package oobot.robot.student;
  */
 public interface Wheel extends Component {
     /**
-     * Mount angle in radians, 0 = forward, + = CCW; left if sin &gt; 0, right if
-     * sin &lt; 0.
+     * Mount angle in radians, 0 = forward, + = CCW; left if
+     * {@code sin(angle) > 0.9}, right if {@code sin(angle) < -0.9}.
      */
     double angle();
 
