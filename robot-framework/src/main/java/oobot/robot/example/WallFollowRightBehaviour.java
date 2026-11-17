@@ -1,4 +1,8 @@
-package oobot.robot;
+package oobot.robot.example;
+
+import oobot.robot.student.Mover;
+import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Sensors;
 
 /**
  * Example robot behaviour: follow the right wall using two proximity sensors.
@@ -29,8 +33,8 @@ package oobot.robot;
  * the robot turns right until it finds a wall, then tracks alongside it.
  * <p>
  * Commands {@link Mover} only: no motor power values are visible here — the
- * {@link WheeledMover} implementation handles the per-motor translation.
- * This is the decoupling boundary in action.
+ * {@link oobot.robot.bridge.sim.SimWheeledMover} implementation handles the
+ * per-wheel translation. This is the decoupling boundary in action.
  */
 public class WallFollowRightBehaviour implements RobotBehaviour {
     /** Target world units to keep from the wall on the right. */
@@ -46,7 +50,13 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
     private State state = State.FOLLOW;
     private int ticksInState = 0;
 
-    private final Mover mover = new WheeledMover();
+    private final Mover mover;
+    private final Sensors sensors;
+
+    public WallFollowRightBehaviour(Mover mover, Sensors sensors) {
+        this.mover = mover;
+        this.sensors = sensors;
+    }
 
     @Override
     public void init() {
@@ -58,8 +68,8 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
 
     @Override
     public void update() {
-        double front = Sensors.distance();
-        double right = Sensors.rightDistance();
+        double front = sensors.distance();
+        double right = sensors.rightDistance();
         ticksInState++;
 
         switch (state) {

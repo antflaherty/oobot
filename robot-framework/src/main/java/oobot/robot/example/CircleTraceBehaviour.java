@@ -1,4 +1,8 @@
-package oobot.robot;
+package oobot.robot.example;
+
+import oobot.robot.student.Mover;
+import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Sensors;
 
 /**
  * Example robot behaviour: circle trace.
@@ -10,8 +14,9 @@ package oobot.robot;
  * <p>
  * Commands {@link Mover} only: {@code forward()} on FORWARD ticks,
  * {@code turnRight()} on TURN ticks. No motor power values are visible to
- * this class — the {@link WheeledMover} implementation handles the
- * per-motor translation. This is the decoupling boundary in action.
+ * this class — the {@link oobot.robot.bridge.sim.SimWheeledMover}
+ * implementation handles the per-wheel translation. This is the decoupling
+ * boundary in action.
  * <p>
  * Reads {@code sensorSnapshot} each tick (ignored in iteration 1 - no sensors)
  * to exercise the sensor path.
@@ -23,7 +28,13 @@ public class CircleTraceBehaviour implements RobotBehaviour {
     private static final int TICKS_PER_FORWARD = 2; // ~100 ms at 20 Hz (~10 units per segment)
     private static final int TICKS_PER_TURN = 2;    // ~100 ms at 20 Hz (~9 degrees per turn)
 
-    private final Mover mover = new WheeledMover();
+    private final Mover mover;
+    private final Sensors sensors;
+
+    public CircleTraceBehaviour(Mover mover, Sensors sensors) {
+        this.mover = mover;
+        this.sensors = sensors;
+    }
 
     @Override
     public void init() {
@@ -34,7 +45,7 @@ public class CircleTraceBehaviour implements RobotBehaviour {
     @Override
     public void update() {
         // Exercise the sensor path (reads latest sensorSnapshot); ignored in iteration 1.
-        long ignoredTick = Sensors.latestSimTick();
+        long ignoredTick = sensors.latestSimTick();
 
         switch (state) {
             case FORWARD:

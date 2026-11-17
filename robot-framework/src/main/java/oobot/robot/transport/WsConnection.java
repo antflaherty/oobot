@@ -1,4 +1,4 @@
-package oobot.robot;
+package oobot.robot.transport;
 
 import java.io.ByteArrayOutputStream;
 import java.io.EOFException;
@@ -15,7 +15,7 @@ import java.util.Random;
 /**
  * Minimal RFC 6455 WebSocket client over a raw TCP socket.
  * <p>
- * Used by the robot framework so robot code never touches sockets directly.
+ * Used by the sim bridge so robot code never touches sockets directly.
  * Only the features needed by the MVP are implemented:
  * <ul>
  *   <li>HTTP upgrade handshake (Sec-WebSocket-Key / Version 13)</li>
@@ -24,7 +24,7 @@ import java.util.Random;
  * </ul>
  * All client-to-server frames are masked, as required by RFC 6455.
  */
-final class WsConnection {
+public class WsConnection {
     private static final String GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     private static final int HANDSHAKE_TIMEOUT_MS = 10000;
 
@@ -40,7 +40,7 @@ final class WsConnection {
     private volatile boolean open = false;
     private volatile boolean closed = false;
 
-    WsConnection(String host, int port, WsListener listener) {
+    public WsConnection(String host, int port, WsListener listener) {
         this.host = host;
         this.port = port;
         this.listener = listener;
@@ -50,7 +50,7 @@ final class WsConnection {
      * Blocking: performs TCP connect + WebSocket handshake, then starts the
      * read loop on its own thread.
      */
-    void connect() throws IOException {
+    public void connect() throws IOException {
         socket = new Socket();
         socket.connect(new InetSocketAddress(host, port), HANDSHAKE_TIMEOUT_MS);
         try {
@@ -69,7 +69,7 @@ final class WsConnection {
     }
 
     /** Send one masked text frame (client-to-server frames must be masked). */
-    void sendText(String text) {
+    public void sendText(String text) {
         byte[] payload = text.getBytes(StandardCharsets.UTF_8);
         synchronized (sendLock) {
             if (!open) {
@@ -105,11 +105,11 @@ final class WsConnection {
         }
     }
 
-    boolean isOpen() {
+    public boolean isOpen() {
         return open;
     }
 
-    void close() {
+    public void close() {
         synchronized (sendLock) {
             open = false;
             closed = true;

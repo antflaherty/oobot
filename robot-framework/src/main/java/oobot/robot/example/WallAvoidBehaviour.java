@@ -1,4 +1,8 @@
-package oobot.robot;
+package oobot.robot.example;
+
+import oobot.robot.student.Mover;
+import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Sensors;
 
 /**
  * Example robot behaviour: wall avoidance using {@link Sensors#distance()}.
@@ -16,14 +20,20 @@ package oobot.robot;
  * obstacles the robot drives forward until it nears a box edge.
  * <p>
  * Commands {@link Mover} only: no motor power values are visible here — the
- * {@link WheeledMover} implementation handles the per-motor translation.
- * This is the decoupling boundary in action.
+ * {@link oobot.robot.bridge.sim.SimWheeledMover} implementation handles the
+ * per-wheel translation. This is the decoupling boundary in action.
  */
 public class WallAvoidBehaviour implements RobotBehaviour {
     /** World units: react when something is this close or closer ahead. */
     private static final double THRESHOLD = 50.0;
 
-    private final Mover mover = new WheeledMover();
+    private final Mover mover;
+    private final Sensors sensors;
+
+    public WallAvoidBehaviour(Mover mover, Sensors sensors) {
+        this.mover = mover;
+        this.sensors = sensors;
+    }
 
     @Override
     public void init() {
@@ -33,7 +43,7 @@ public class WallAvoidBehaviour implements RobotBehaviour {
 
     @Override
     public void update() {
-        double distance = Sensors.distance();
+        double distance = sensors.distance();
 
         if (distance < THRESHOLD) {
             // Something ahead (wall/obstacle): stop, then turn right to avoid it.

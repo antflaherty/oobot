@@ -1,7 +1,7 @@
-package oobot.robot;
+package oobot.robot.transport;
 
 /** Callbacks delivered by {@link WsConnection} on its read thread. */
-interface WsListener {
+public interface WsListener {
     void onOpen();
 
     void onMessage(String line);

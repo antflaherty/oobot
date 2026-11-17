@@ -1,4 +1,4 @@
-package oobot.robot;
+package oobot.robot.transport;
 
 /**
  * Incoming wire envelope: {@code { type, seq, simTick, payload }}.

@@ -1,4 +1,8 @@
-package oobot.robot;
+package oobot.robot.example;
+
+import oobot.robot.student.Mover;
+import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Sensors;
 
 /**
  * Example robot behaviour: square trace.
@@ -10,8 +14,9 @@ package oobot.robot;
  * <p>
  * Commands {@link Mover} only: {@code forward()} on FORWARD ticks,
  * {@code turnRight()} on TURN ticks. No motor power values are visible to
- * this class — the {@link WheeledMover} implementation handles the
- * per-motor translation. This is the decoupling boundary in action.
+ * this class — the {@link oobot.robot.bridge.sim.SimWheeledMover}
+ * implementation handles the per-wheel translation. This is the decoupling
+ * boundary in action.
  */
 public class SquareTraceBehaviour implements RobotBehaviour {
     private enum State { FORWARD, TURN_RIGHT }
@@ -19,7 +24,13 @@ public class SquareTraceBehaviour implements RobotBehaviour {
     private int ticksInState = 0;
     private static final int TICKS_PER_STATE = 20; // ~1 second at 20 Hz
 
-    private final Mover mover = new WheeledMover();
+    private final Mover mover;
+    private final Sensors sensors;
+
+    public SquareTraceBehaviour(Mover mover, Sensors sensors) {
+        this.mover = mover;
+        this.sensors = sensors;
+    }
 
     @Override
     public void init() {
@@ -30,7 +41,7 @@ public class SquareTraceBehaviour implements RobotBehaviour {
     @Override
     public void update() {
         // Exercise the sensor path (reads latest sensorSnapshot); ignored in iteration 1.
-        long ignoredTick = Sensors.latestSimTick();
+        long ignoredTick = sensors.latestSimTick();
 
         switch (state) {
             case FORWARD:

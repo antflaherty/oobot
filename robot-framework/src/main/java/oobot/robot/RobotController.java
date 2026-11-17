@@ -1,10 +1,23 @@
 package oobot.robot;
 
+import oobot.robot.student.Brain;
+import oobot.robot.student.Mover;
+import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Sensors;
+import oobot.robot.bridge.sim.SimRobot;
+import oobot.robot.example.CircleTraceBehaviour;
+import oobot.robot.example.DefaultBrain;
+import oobot.robot.example.HeartTraceBehaviour;
+import oobot.robot.example.SquareTraceBehaviour;
+import oobot.robot.example.WallAvoidBehaviour;
+import oobot.robot.example.WallFollowRightBehaviour;
+import oobot.robot.example.WheeledMover;
+
 /**
  * Entry point for the robot controller process.
  * <p>
  * Usage: {@code java -jar robot.jar --host localhost --port <ROBOT_PORT>
- * [--behaviour square|wall-avoid]}
+ * [--behaviour square|wall-avoid|wall-follow-right|circle|heart]}
  *
  * <p>
  * Defaults: {@code --host localhost --port 8080 --behaviour square}. Pass the
@@ -50,31 +63,23 @@ public class RobotController {
 
         System.out.println("[robot-controller] starting; connecting to ws://" + host + ":" + port);
 
-        RobotBehaviour behaviour = new SquareTraceBehaviour();
-        switch (behaviourName) {
-            case "square":
-                behaviour = new SquareTraceBehaviour();
-                break;
-            case "wall-avoid":
-                behaviour = new WallAvoidBehaviour();
-                break;
-            case "wall-follow-right":
-                behaviour = new WallFollowRightBehaviour();
-                break;
-            default:
-                System.err.println("[robot-controller] unknown behaviour: " + behaviourName);
-                System.exit(2);
-        }
-        Framework framework = new Framework(host, port, behaviour);
-        WheeledMover.setFramework(framework);
-        Sensors.setFramework(framework);
+        SimRobot robot = new SimRobot(host, port);
 
-        Runtime.getRuntime().addShutdownHook(new Thread(framework::stop, "robot-shutdown"));
+        // Build the robot-side mover from the sim bridge's wheels.
+        Mover mover = new WheeledMover(robot.leftWheel(), robot.rightWheel());
+        Sensors sensors = robot.sensors();
 
-        framework.start();
+        RobotBehaviour behaviour = createBehaviour(behaviourName, mover, sensors);
+
+        Brain brain = new DefaultBrain(mover, sensors);
+        brain.setBehaviour(behaviour);
+
+        Runtime.getRuntime().addShutdownHook(new Thread(robot::stop, "robot-shutdown"));
+
+        robot.run(brain);
         System.out.println("[robot-controller] behaviour loop running at ~20 Hz");
 
-        while (framework.isRunning()) {
+        while (robot.isRunning()) {
             try {
                 Thread.sleep(500);
             } catch (InterruptedException e) {
@@ -83,5 +88,24 @@ public class RobotController {
             }
         }
         System.out.println("[robot-controller] shutdown complete");
+    }
+
+    private static RobotBehaviour createBehaviour(String name, Mover mover, Sensors sensors) {
+        switch (name) {
+            case "square":
+                return new SquareTraceBehaviour(mover, sensors);
+            case "wall-avoid":
+                return new WallAvoidBehaviour(mover, sensors);
+            case "wall-follow-right":
+                return new WallFollowRightBehaviour(mover, sensors);
+            case "circle":
+                return new CircleTraceBehaviour(mover, sensors);
+            case "heart":
+                return new HeartTraceBehaviour(mover, sensors);
+            default:
+                System.err.println("[robot-controller] unknown behaviour: " + name);
+                System.exit(2);
+                return null; // unreachable
+        }
     }
 }

@@ -1,4 +1,8 @@
-package oobot.robot;
+package oobot.robot.example;
+
+import oobot.robot.student.Mover;
+import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Sensors;
 
 /**
  * Example robot behaviour: heart trace.
@@ -45,9 +49,12 @@ public class HeartTraceBehaviour implements RobotBehaviour {
     private int ticksLeft = 0;
     private State state = State.TURN;
 
-    private final Mover mover = new WheeledMover();
+    private final Mover mover;
+    private final Sensors sensors;
 
-    public HeartTraceBehaviour() {
+    public HeartTraceBehaviour(Mover mover, Sensors sensors) {
+        this.mover = mover;
+        this.sensors = sensors;
         this.path = buildPath();
     }
 
@@ -97,7 +104,7 @@ public class HeartTraceBehaviour implements RobotBehaviour {
     @Override
     public void update() {
         // Exercise the sensor path (reads latest sensorSnapshot); ignored in iteration 1.
-        long ignoredTick = Sensors.latestSimTick();
+        long ignoredTick = sensors.latestSimTick();
 
         Seg seg = path[segIdx];
 

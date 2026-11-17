@@ -1,4 +1,4 @@
-package oobot.robot;
+package oobot.robot.transport;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -16,16 +16,16 @@ import java.util.Map;
  * </ul>
  * Malformed input yields {@code null} (log and ignore; never crash).
  */
-final class Json {
+public final class Json {
     private Json() {}
 
-    static String writeMotorCommand(long seq, long simTick, double left, double right) {
+    public static String writeMotorCommand(long seq, long simTick, double left, double right) {
         return "{\"type\":\"motorCommand\",\"seq\":" + seq
             + ",\"simTick\":" + simTick
             + ",\"payload\":{\"left\":" + fmt(left) + ",\"right\":" + fmt(right) + "}}\n";
     }
 
-    static String fmt(double d) {
+    public static String fmt(double d) {
         if (!Double.isFinite(d)) {
             return "0";
         }
@@ -36,7 +36,7 @@ final class Json {
      * Parse one NDJSON line into an {@link Envelope}. Returns {@code null} if
      * the line is malformed or not an object envelope (log and ignore).
      */
-    static Envelope parseEnvelope(String line) {
+    public static Envelope parseEnvelope(String line) {
         if (line == null || line.isBlank()) {
             return null;
         }

@@ -45,19 +45,31 @@ oobot/
 ├── robot-framework/          # Java framework + example controller (fat JAR)
 │   ├── robot.jar             # prebuilt (gitignored but committed here for dev)
 │   ├── src/main/java/oobot/robot/
-│   │   ├── RobotController.java  # main: connects, runs behaviour loop
-│   │   ├── Framework.java        # connection + behaviour scheduler (~20 Hz)
-│   │   ├── RobotBehaviour.java   # student-facing: init() / update()
-│   │   ├── Mover.java            # forward / turnRight / turnLeft / stop
-│   │   ├── WheeledMover.java     # Mover impl → motorCommand NDJSON
-│   │   ├── Motor.java            # static setSpeed(double)
-│   │   ├── Sensors.java          # static latestSimTick()
-│   │   ├── SquareTraceBehaviour.java (default example)
-│   │   ├── CircleTraceBehaviour.java
-│   │   ├── HeartTraceBehaviour.java
-│   │   ├── WsConnection.java     # hand-rolled WebSocket client
-│   │   ├── Json.java / Envelope.java / WsListener.java
-│   │   └── build/                # javac output (gitignored)
+│   │   ├── RobotController.java  # main entry point (wires student + framework)
+│   │   ├── student/              # ← STUDENT CODE AREA (DI happens here)
+│   │   │   ├── RobotBehaviour.java  # student implements: init() / update()
+│   │   │   ├── Mover.java           # student writes: wheel→movement abstraction
+│   │   │   ├── Brain.java           # student writes: DI/wiring of Mover+Sensors+Behaviour
+│   │   │   ├── Sensors.java         # student-facing sensor interface
+│   │   │   └── Wheel.java           # student-facing wheel interface
+│   │   ├── example/               # example implementations (reference, not student)
+│   │   │   ├── WheeledMover.java    # reference Mover implementation
+│   │   │   ├── DefaultBrain.java    # reference Brain (DI) implementation
+│   │   │   ├── SquareTraceBehaviour.java (default example)
+│   │   │   ├── CircleTraceBehaviour.java
+│   │   │   ├── HeartTraceBehaviour.java
+│   │   │   ├── WallAvoidBehaviour.java
+│   │   │   └── WallFollowRightBehaviour.java
+│   │   ├── core/                  # framework core (not student)
+│   │   │   └── BehaviourLoop.java
+│   │   ├── bridge/sim/            # sim bridge (not student)
+│   │   │   ├── SimRobot.java
+│   │   │   ├── SimSensors.java
+│   │   │   └── SimWheel.java
+│   │   └── transport/             # transport (not student)
+│   │       ├── WsConnection.java
+│   │       ├── Json.java / Envelope.java / WsListener.java
+│   │   └── build/                 # javac output (gitignored)
 │   └── README.md
 ├── specs/                    # wire contract & component specs (read-only reference)
 │   ├── WIRE_PROTOCOL.md      # NDJSON envelope, ports, message types
@@ -113,16 +125,50 @@ Full spec: `specs/WIRE_PROTOCOL.md`. Transport interface: `specs/COMMS.md`.
 
 ## Student-facing Java API (robot code touches only this)
 
+The student code area is `robot-framework/src/main/java/oobot/robot/student/`.
+Students write implementations of all the interfaces here:
+
+- **`RobotBehaviour`** — implement `init()` / `update()` (~20 Hz): read sensors,
+  command movement.
+- **`Mover`** — implement the wheel-to-movement abstraction: translate high-level
+  commands (`forward()`, `turnRight()`, ...) into per-wheel actions.
+- **`Brain`** — the DI/wiring interface: assemble a `Mover`, `Sensors`, and an
+  initial `RobotBehaviour`, then hand the brain to the behaviour loop.
+- **`Sensors`** — `latestSimTick()` / `distance()` / `rightDistance()`.
+- **`Wheel`** — `clockwise()` / `antiClockwise()` / `stop()`.
+
+Student code never touches sockets, JSON, motor power values, or wheel mounting —
+it commands movement via `Mover` / `Wheel` and reads sensors via `Sensors`. A
+`Brain` ties them together; the behaviour loop
+(`oobot.robot.core.BehaviourLoop`) calls `Brain.tick()` at ~20 Hz.
+
 ```java
-interface RobotBehaviour { void init(); void update(); }      // ~20 Hz
+interface RobotBehaviour { void init(); void update(); }      // student implements (~20 Hz)
 interface Mover { void forward(); void turnRight(); void turnLeft(); void stop(); }
-class Motor { static void setSpeed(double speed); }           // [-1, 1]
-class Sensors { static long latestSimTick(); static double distance(); static double rightDistance(); }   // front + right proximity readings
+interface Wheel { void clockwise(); void antiClockwise(); void stop(); }
+interface Sensors {
+    long latestSimTick();
+    double distance();          // front proximity
+    double rightDistance();     // right proximity
+}
+interface Brain {                 // student writes DI/wiring implementation
+    Mover mover();
+    Sensors sensors();
+    void setBehaviour(RobotBehaviour behaviour);
+    void tick();                  // delegates to current behaviour.update()
+}
 ```
 
-Example behaviours implement `RobotBehaviour` and command movement via `Mover`.
-Default example: `SquareTraceBehaviour`. Framework (`Framework.java`) hides
-WebSocket, NDJSON framing, reconnection, and concurrency.
+Example implementations (reference, not student code) live in `oobot.robot.example`
+(`WheeledMover` is the reference Mover; `DefaultBrain` is the reference Brain;
+`SquareTraceBehaviour` is the default example behaviour).
+The bridge (`oobot.robot.bridge.sim.SimRobot`) hides WebSocket, NDJSON framing,
+reconnection, and concurrency.
+
+To add a new behaviour: create a class implementing `RobotBehaviour`,
+provide or choose a `Mover`, wire them into your own `Brain`, and
+register everything in `oobot.robot.RobotController` (`createBehaviour`).
+Rebuild the JAR.
 
 ## Coding conventions & constraints
 
@@ -146,8 +192,8 @@ component boundaries change; code is source of truth otherwise.
 | Change sim world/timestep/collision | `simulator/server/src/sim.ts`, `world.ts` |
 | Add a sim→visualiser message type | `simulator/server/src/transport.ts`, `types.ts` + `specs/WIRE_PROTOCOL.md` |
 | Change robot→sim command handling | `simulator/server/src/transport.ts` |
-| Add a robot behaviour | New `*.java` implementing `RobotBehaviour` in `robot-framework/src/...` |
-| Change the Java hardware API | `RobotBehaviour.java`, `Mover.java`, `Motor.java`, `Sensors.java` |
+| Add a robot behaviour | New `*.java` implementing `RobotBehaviour` in `robot-framework/src/main/java/oobot/robot/api/` (or `example/`) |
+| Change the Java hardware API | `oobot/robot/api/{RobotBehaviour,Mover,Sensors,Wheel,Brain}.java` |
 | Change visualiser rendering | `simulator/visualiser/src/renderer.ts`, `main.ts` |
 | Change visualiser WS client | `simulator/visualiser/src/liveStream.ts` |
 | One-command dev startup | `scripts/dev.js` + root `package.json` |
