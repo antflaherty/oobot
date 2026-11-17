@@ -42,6 +42,37 @@ resolved in task `D3.c`.
 
 ---
 
+## Start here — orchestrator quickstart
+
+This file is self-contained. A brand-new session can run the entire programme
+from it without any prior conversation.
+
+- **Branch:** `hardening/pre-feature`, created from `main` at `c2d3cfe`. Stay on
+  it. Do not merge to `main` until `I4.1` sign-off.
+- **Your role:** dispatch, gate and review. Do not implement tasks yourself.
+- **Agent type:** use the `general` subagent for implementation tasks. `explore`
+  is read-only and only useful for research, not for these tasks.
+- **Working mode:** default to the shared worktree; the exclusive ownership
+  table guarantees agents in the same wave cannot collide. Worktrees are
+  optional — if you use them, substitute that worktree's absolute plan path
+  into the dispatch prompt.
+- **Never run `git add -A` or `git add .`.** Stage explicit file paths only, so
+  `next.md` (ground rule 7) can never be swept into a commit.
+- **Sequence:**
+  1. Confirm `git branch --show-current` is `hardening/pre-feature`.
+  2. For each wave in the wave schedule, dispatch **all** its tasks concurrently
+     using the prompt template below (one prompt per task, substituting
+     `<TASK_ID>`). `T0.5` must be dispatched in W0; W1 depends on its output.
+  3. When every agent in the wave reports, run **every** task's Verify command,
+     plus `git diff --check`, plus `git status --short`.
+  4. If all green, review the diffs and commit that wave explicitly, e.g.
+     `git commit -m "hardening(W1): correctness fixes"`. If anything is red,
+     return the failing task to its agent and do **not** start the next wave.
+  5. After W3, run `I4.1`; only then hand back for human sign-off.
+- **Discovery:** detailed review evidence is in the Appendix; locked design
+  decisions are in the Decisions table; the doc inventory is in
+  `docs/DOC_AUDIT.md` once `T0.5` has landed.
+
 ## Agent dispatch prompt
 
 Do **not** rely on `AGENTS.md` to point agents at this plan. Every agent prompt
