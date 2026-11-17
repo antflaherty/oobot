@@ -6,14 +6,14 @@
 export type Channel = "robot" | "visualiser";
 
 export interface IncomingEnvelope {
-  type: string;        // e.g. "motorCommand", "userControl"
+  type: string;        // e.g. "componentCommand"
   seq: number;         // per-connection sender sequence
   simTick?: number;    // sim logical tick the message relates to (optional on input)
   payload: unknown;    // message-specific data
 }
 
 export interface OutgoingEnvelope {
-  type: string;        // e.g. "sensorSnapshot", "worldSnapshot"
+  type: string;        // e.g. "componentSnapshot", "worldSnapshot"
   seq: number;         // per-connection sender sequence (assigned by transport on send)
   simTick: number;     // sim logical tick this snapshot describes
   payload: unknown;    // message-specific data

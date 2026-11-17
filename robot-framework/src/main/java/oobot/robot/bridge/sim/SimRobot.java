@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Sim bridge: the concrete, sim-specific piece that sits between the
- * student-facing API ({@link oobot.robot.student.*}) and the WebSocket-connected
+ * student-facing API ({@link Brain} and friends) and the WebSocket-connected
  * simulation.
  * <p>
  * Responsibilities:
@@ -39,8 +39,9 @@ import java.util.concurrent.atomic.AtomicLong;
  *       {@link RobotDescription} and bind them into a {@link ComponentRegistry}.</li>
  *   <li>Expose that registry via {@link #components()} so a {@link Brain} can
  *       be built against id-addressed components.</li>
- *   <li>Translate wheel value changes into {@code componentCommand} NDJSON
- *       messages over the WebSocket.</li>
+ *   <li>Buffer wheel value changes locally and flush them as a single
+ *       {@code componentCommand} NDJSON frame at the end of each behaviour
+ *       tick (see {@link #flushCommands()}).</li>
  *   <li>Parse incoming {@code componentSnapshot} messages and update the bound
  *       proximity sensor handles; unknown ids are ignored.</li>
  *   <li>On every disconnect/shutdown, write one explicit zero command for all
@@ -84,8 +85,10 @@ public class SimRobot implements RobotPlatform {
     private volatile boolean commandsEnabled = false;
     private volatile Thread reconnectThread;
 
-    // Persistent actuator state: latest per-wheel value in [-1, 1].
+    // Persistent actuator state: latest per-wheel value in [-1, 1]. The
+    // commandsDirty flag is guarded by the wheelValues monitor.
     private final Map<String, Double> wheelValues = new LinkedHashMap<>();
+    private boolean commandsDirty = false;
     private volatile long latestSimTick = 0L;
 
     public SimRobot(String host, int port, RobotDescription description) {
@@ -108,7 +111,7 @@ public class SimRobot implements RobotPlatform {
                     registry.bind(component.id(), wheel);
                 }
                 case PROXIMITY_SENSOR -> {
-                    SimProximitySensor sensor = new SimProximitySensor(this, component.id());
+                    SimProximitySensor sensor = new SimProximitySensor(component.id());
                     sensorsById.put(component.id(), sensor);
                     registry.bind(component.id(), sensor);
                 }
@@ -136,23 +139,32 @@ public class SimRobot implements RobotPlatform {
         return connection != null && commandsEnabled;
     }
 
+    /** Package-private test seam: the current behaviour loop, if any. */
+    BehaviourLoop currentLoop() {
+        return loop;
+    }
+
     /**
      * Start the behaviour loop driving the given brain (~20 Hz, calling
-     * {@link Brain#tick()} each tick). Non-blocking.
+     * {@link Brain#tick()} and then {@link #flushCommands()} each tick).
+     * Any previously running loop is stopped first, so repeated calls never
+     * leave an old ticker driving the robot. Non-blocking.
      */
     @Override
     public void run(Brain brain) {
         Objects.requireNonNull(brain, "brain");
-        BehaviourLoop newLoop = new BehaviourLoop(() -> {
-            if (running) {
-                brain.tick();
-            }
-        });
         BehaviourLoop previous = loop;
-        loop = newLoop;
         if (previous != null) {
             previous.stop();
         }
+        BehaviourLoop newLoop = new BehaviourLoop(
+                () -> {
+                    if (running) {
+                        brain.tick();
+                    }
+                },
+                this::flushCommands);
+        loop = newLoop;
         newLoop.start();
     }
 
@@ -208,13 +220,20 @@ public class SimRobot implements RobotPlatform {
         synchronized (wheelValues) {
             if (wheelValues.containsKey(id)) {
                 wheelValues.put(id, clamp(value));
+                commandsDirty = true;
             }
         }
     }
 
-    /** Called by a wheel when its value changes — sends one batched componentCommand. */
+    /**
+     * Marker called by a wheel after {@link #setWheelValue(String, double)}.
+     * No NDJSON is written here: the change is flushed together with every
+     * other wheel change from the same behaviour tick by {@link #flushCommands()}.
+     */
     void wheelChanged() {
-        sendComponentCommand();
+        synchronized (wheelValues) {
+            commandsDirty = true;
+        }
     }
 
     private static double clamp(double s) {
@@ -224,20 +243,31 @@ public class SimRobot implements RobotPlatform {
         return s;
     }
 
-    private void sendComponentCommand() {
+    /**
+     * Send every wheel value changed since the last flush as one
+     * {@code componentCommand}. Invoked by {@link BehaviourLoop} after each
+     * {@link Brain#tick()}, so a tick that moves both wheels emits exactly one
+     * frame. Does nothing when no value changed or no socket is connected.
+     * Package-private for tests in this package.
+     */
+    void flushCommands() {
         List<ComponentValue> commands;
         long sequence;
         long tick;
         WsConnection c;
         synchronized (connectionLock) {
-            if (!commandsEnabled || connection == null) {
-                return;
-            }
-            commands = new ArrayList<>();
             synchronized (wheelValues) {
+                if (!commandsDirty || !commandsEnabled || connection == null) {
+                    // Drop changes made while disconnected: they must not be
+                    // replayed onto a fresh connection with a stale seq/tick.
+                    commandsDirty = false;
+                    return;
+                }
+                commands = new ArrayList<>();
                 for (Map.Entry<String, Double> entry : wheelValues.entrySet()) {
                     commands.add(new ComponentValue(entry.getKey(), entry.getValue()));
                 }
+                commandsDirty = false;
             }
             sequence = seq.getAndIncrement();
             tick = latestSimTick;
@@ -245,7 +275,7 @@ public class SimRobot implements RobotPlatform {
         }
         String line = Json.writeComponentCommand(sequence, tick, commands);
         c.sendText(line);
-        log.debug("Sent componentCommand {}", line.trim());
+        log.debug("Sent batched componentCommand {}", line.trim());
     }
 
     /**
@@ -261,6 +291,8 @@ public class SimRobot implements RobotPlatform {
                 wheelValues.put(id, 0.0);
                 zeros.add(new ComponentValue(id, 0.0));
             }
+            // The zero frame supersedes anything buffered during this tick.
+            commandsDirty = false;
         }
         return Json.writeComponentCommand(seq.getAndIncrement(), latestSimTick, zeros);
     }

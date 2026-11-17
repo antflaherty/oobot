@@ -42,6 +42,21 @@ interface WheelLevels {
   right: number;
 }
 
+// S2.2: high-frequency events (a componentCommand per wheel at ~20 Hz, and a
+// collision every 60 Hz tick during steady wall contact) are aggregated into
+// counters instead of being logged individually. Totals are appended to the
+// existing 5 s achieved-Hz line and exposed via getState() for tests/tooling.
+interface EventCounters {
+  commandsApplied: number; // accepted componentCommand envelopes
+  commandsIgnored: number; // componentCommand envelopes/entries rejected
+  commandsClamped: number; // individual wheel values clamped into [-1, 1]
+  collisions: number; // ticks whose world.apply reported a collision
+}
+
+function emptyCounters(): EventCounters {
+  return { commandsApplied: 0, commandsIgnored: 0, commandsClamped: 0, collisions: 0 };
+}
+
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -111,6 +126,13 @@ export class SimEngine {
   private ticksSinceLog = 0;
   private logStartTime = Date.now();
 
+  // S2.2: cumulative event totals. Kept monotonic so tooling can assert on
+  // them without scraping stdout; reported with the 5 s achieved-Hz line.
+  private readonly counters: EventCounters = emptyCounters();
+
+  // Emit the (accurate) collision detail line at most once per report window.
+  private collisionLoggedThisWindow = false;
+
   constructor(
     transport: Transport,
     description: RobotDescription,
@@ -152,6 +174,7 @@ export class SimEngine {
       ) => {
         if (envelope.type === "componentCommand") {
           if (channel !== "robot" || connectionId !== this.robotConnectionId) {
+            this.counters.commandsIgnored++;
             log(
               `ignoring componentCommand from non-active connection ` +
                 `${channel}/${connectionId} (active robot: ${this.robotConnectionId ?? "none"})`,
@@ -210,6 +233,7 @@ export class SimEngine {
     // Ownership was checked by onMessage; keep this guard so the invariant is
     // enforced at the point where actuator state is about to be touched.
     if (envelope.type !== "componentCommand" || connectionId !== this.robotConnectionId) {
+      this.counters.commandsIgnored++;
       log(`ignoring componentCommand from non-active connection ${connectionId}`);
       return;
     }
@@ -217,6 +241,7 @@ export class SimEngine {
     const { seq, simTick } = envelope;
     // D-4 step 2: finite, non-negative integers only.
     if (!isNonNegativeInteger(seq) || !isNonNegativeInteger(simTick)) {
+      this.counters.commandsIgnored++;
       log(
         `ignoring componentCommand with invalid seq/simTick from ${connectionId} ` +
           `(seq=${String(seq)}, simTick=${String(simTick)})`,
@@ -226,6 +251,7 @@ export class SimEngine {
 
     // D-4 step 3: duplicate / out-of-order seq.
     if (seq <= this.lastAppliedSeq) {
+      this.counters.commandsIgnored++;
       log(
         `ignoring duplicate/stale componentCommand seq=${seq} ` +
           `(lastAppliedSeq=${this.lastAppliedSeq}) from ${connectionId}`,
@@ -235,6 +261,7 @@ export class SimEngine {
 
     // D-4 step 4: one tick of tolerance for benign reordering; older is stale.
     if (this.lastSeenTick !== null && simTick < this.lastSeenTick - 1) {
+      this.counters.commandsIgnored++;
       log(
         `ignoring stale componentCommand simTick=${simTick} ` +
           `(lastSeenTick=${this.lastSeenTick}) from ${connectionId}`,
@@ -244,6 +271,7 @@ export class SimEngine {
 
     const payload = envelope.payload;
     if (!isComponentCommandPayload(payload)) {
+      this.counters.commandsIgnored++;
       log("ignoring malformed componentCommand payload:", JSON.stringify(payload).slice(0, 120));
       return;
     }
@@ -251,16 +279,19 @@ export class SimEngine {
     // Accepted: advance tracking state only now, before touching actuators.
     this.lastAppliedSeq = seq;
     this.lastSeenTick = Math.max(this.lastSeenTick ?? simTick, simTick);
+    this.counters.commandsApplied++;
 
     for (const command of payload.commands) {
       let component: ComponentDescription;
       try {
         component = this.registry.get(command.id);
       } catch {
+        this.counters.commandsIgnored++;
         log(`ignoring command for unknown component id "${command.id}" (tick ${this.simTick})`);
         continue;
       }
       if (component.type !== "wheel") {
+        this.counters.commandsIgnored++;
         log(`ignoring command for non-wheel component "${command.id}" (tick ${this.simTick})`);
         continue;
       }
@@ -276,14 +307,10 @@ export class SimEngine {
       }
 
       if (value !== command.value) {
-        log(
-          `componentCommand clamped to [-1,1]: { id: "${command.id}", value: ${value.toFixed(3)} } (tick ${this.simTick})`
-        );
-      } else {
-        log(
-          `componentCommand { id: "${command.id}", value: ${value.toFixed(3)} } (tick ${this.simTick})`
-        );
+        this.counters.commandsClamped++;
       }
+      // S2.2: do not log every accepted command (2 wheels × ~20 Hz). The
+      // aggregate is reported with the 5 s achieved-Hz line and via getState().
     }
   }
 
@@ -342,11 +369,18 @@ export class SimEngine {
     //    reused if the robot is slow; sim never waits for a new command).
     const collision = this.world.apply(this.latestCommand.left, this.latestCommand.right);
     if (collision.collided) {
-      const p = this.world.pose;
-      log(
-        `collision at tick ${this.simTick}: pose=(${p.x.toFixed(2)},${p.y.toFixed(2)}) ` +
-          `stopped against obstacle/boundary`,
-      );
+      this.counters.collisions++;
+      // S2.2: wall contact can report a collision every 60 Hz tick. Keep the
+      // accurate detail line, but emit it at most once per report window; the
+      // running total is reported with the 5 s achieved-Hz line.
+      if (!this.collisionLoggedThisWindow) {
+        const p = this.world.pose;
+        log(
+          `collision at tick ${this.simTick}: pose=(${p.x.toFixed(2)},${p.y.toFixed(2)}) ` +
+            `stopped against obstacle/boundary`,
+        );
+        this.collisionLoggedThisWindow = true;
+      }
     }
 
     // 2. Every declared proximity sensor casts from the robot centre along
@@ -392,11 +426,14 @@ export class SimEngine {
       const hz = (this.ticksSinceLog / ((now - this.logStartTime) / 1000)).toFixed(1);
       const p = this.world.pose;
       const c = this.latestCommand;
+      const counts = this.counters;
       log(
-        `achieved ${hz} Hz (tick ${this.simTick}) | pose=(${p.x.toFixed(2)},${p.y.toFixed(2)},heading=${p.heading.toFixed(3)}) | command={ left: ${c.left.toFixed(2)}, right: ${c.right.toFixed(2)} } | robotConn=${this.robotConnectionId ? 'yes' : 'no'}`,
+        `achieved ${hz} Hz (tick ${this.simTick}) | pose=(${p.x.toFixed(2)},${p.y.toFixed(2)},heading=${p.heading.toFixed(3)}) | command={ left: ${c.left.toFixed(2)}, right: ${c.right.toFixed(2)} } | robotConn=${this.robotConnectionId ? 'yes' : 'no'}` +
+          ` | events(applied=${counts.commandsApplied},ignored=${counts.commandsIgnored},clamped=${counts.commandsClamped},collisions=${counts.collisions})`,
       );
       this.ticksSinceLog = 0;
       this.logStartTime = now;
+      this.collisionLoggedThisWindow = false;
     }
   }
 
@@ -407,6 +444,7 @@ export class SimEngine {
       simTick: this.simTick,
       pose: { ...this.world.pose },
       command: { ...this.latestCommand },
+      counters: { ...this.counters },
     };
   }
 }

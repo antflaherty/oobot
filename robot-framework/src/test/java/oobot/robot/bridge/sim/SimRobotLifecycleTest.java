@@ -3,6 +3,7 @@ package oobot.robot.bridge.sim;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -13,10 +14,15 @@ import java.util.Set;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
+import oobot.robot.core.BehaviourLoop;
 import oobot.robot.description.ComponentDescription;
 import oobot.robot.description.ComponentType;
 import oobot.robot.description.RobotDescription;
+import oobot.robot.student.Brain;
+import oobot.robot.student.Mover;
 import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Wheel;
 import oobot.robot.transport.ComponentCommandMessage;
 import oobot.robot.transport.ComponentValue;
 import oobot.robot.transport.FakeConnections;
@@ -93,6 +99,7 @@ class SimRobotLifecycleTest {
             assertEquals(9.0, front.distance());
 
             h.robot.components().wheel("left-wheel").clockwise();
+            h.robot.flushCommands();
             long firstSeq = lastCommand(first).seq();
 
             first.listener().onClosed(first, 1000, "peer");
@@ -107,6 +114,7 @@ class SimRobotLifecycleTest {
             assertEquals(Double.POSITIVE_INFINITY, front.distance(), "old socket updated a new-session sensor");
 
             h.robot.components().wheel("right-wheel").clockwise();
+            h.robot.flushCommands();
             long secondSeq = lastCommand(second).seq();
 
             assertEquals(0L, firstSeq);
@@ -172,7 +180,107 @@ class SimRobotLifecycleTest {
         }
     }
 
+    @Test
+    void wheelCommandsAreBatchedIntoOneFramePerTick() throws Exception {
+        try (Harness h = new Harness()) {
+            h.awaitConnected();
+            FakeWebSocket socket = h.socket(0);
+
+            h.robot.components().wheel("left-wheel").clockwise();
+            h.robot.components().wheel("right-wheel").antiClockwise();
+            assertTrue(socket.sentFrames().isEmpty(),
+                    "wheels must only mutate local state during a tick");
+
+            h.robot.flushCommands();
+            assertEquals(1, socket.sentFrames().size(),
+                    "two wheel changes in one tick must produce one frame");
+            ComponentCommandMessage cmd = lastCommand(socket);
+            Map<String, Double> values = cmd.payload().commands().stream()
+                    .collect(Collectors.toMap(ComponentValue::id, ComponentValue::value));
+            assertEquals(Set.of("left-wheel", "right-wheel"), values.keySet());
+            assertEquals(1.0, values.get("left-wheel"));
+            assertEquals(1.0, values.get("right-wheel"));
+            assertEquals(0L, cmd.seq());
+
+            h.robot.flushCommands();
+            assertEquals(1, socket.sentFrames().size(), "an idle flush sends nothing");
+
+            h.robot.components().wheel("left-wheel").stop();
+            h.robot.flushCommands();
+            assertEquals(2, socket.sentFrames().size());
+            assertEquals(1L, lastCommand(socket).seq(), "seq advances once per flushed frame");
+        }
+    }
+
+    @Test
+    void oneFramePerTickRegardlessOfWheelCount() throws Exception {
+        RobotDescription fourWheels = new RobotDescription("four-wheels", List.of(
+                new ComponentDescription("left-front", ComponentType.WHEEL, Math.PI / 2, 0.25),
+                new ComponentDescription("right-front", ComponentType.WHEEL, -Math.PI / 2, 0.25),
+                new ComponentDescription("left-rear", ComponentType.WHEEL, Math.PI / 2, 0.25),
+                new ComponentDescription("right-rear", ComponentType.WHEEL, -Math.PI / 2, 0.25),
+                new ComponentDescription("front-sensor", ComponentType.PROXIMITY_SENSOR, 0.0, 0.0),
+                new ComponentDescription("right-sensor", ComponentType.PROXIMITY_SENSOR, -Math.PI / 2, 0.0)));
+        try (Harness h = new Harness(fourWheels)) {
+            h.awaitConnected();
+            FakeWebSocket socket = h.socket(0);
+
+            for (Wheel wheel : h.robot.components().wheels()) {
+                wheel.clockwise();
+            }
+            h.robot.flushCommands();
+
+            assertEquals(1, socket.sentFrames().size(), "four wheels still produce one frame per tick");
+            assertEquals(4, lastCommand(socket).payload().commands().size());
+        }
+    }
+
+    @Test
+    void repeatedRunStopsThePreviousTicker() throws Exception {
+        try (Harness h = new Harness()) {
+            h.awaitConnected();
+            Brain brain = noOpBrain();
+
+            h.robot.run(brain);
+            BehaviourLoop first = h.robot.currentLoop();
+            assertTrue(first.isRunning());
+
+            h.robot.run(brain);
+            BehaviourLoop second = h.robot.currentLoop();
+            assertNotSame(first, second, "run() must create a fresh loop");
+            assertFalse(first.isRunning(), "previous loop must be stopped by run()");
+            awaitTerminated(first);
+            assertTrue(first.isTerminated(), "previous ticker thread must terminate");
+
+            h.robot.run(brain);
+            BehaviourLoop third = h.robot.currentLoop();
+            assertNotSame(second, third);
+            assertFalse(second.isRunning(), "only the newest ticker may run");
+
+            h.robot.stop();
+            assertFalse(third.isRunning());
+            awaitTerminated(third);
+        }
+    }
+
     /* ---------------- helpers ---------------- */
+
+    private static Brain noOpBrain() {
+        return new Brain() {
+            @Override public Mover mover() { return null; }
+            @Override public ProximitySensor frontSensor() { return null; }
+            @Override public ProximitySensor rightSensor() { return null; }
+            @Override public void setBehaviour(RobotBehaviour behaviour) { }
+            @Override public void tick() { }
+        };
+    }
+
+    private static void awaitTerminated(BehaviourLoop loop) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(2);
+        while (!loop.isTerminated() && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+    }
 
     private static RobotDescription description() {
         return new RobotDescription("test-layout", List.of(
@@ -209,7 +317,11 @@ class SimRobotLifecycleTest {
         private final SimRobot robot;
 
         Harness() {
-            robot = new SimRobot("localhost", 8080, description(), (host, port, listener) -> {
+            this(description());
+        }
+
+        Harness(RobotDescription desc) {
+            robot = new SimRobot("localhost", 8080, desc, (host, port, listener) -> {
                 FakeWebSocket socket = new FakeWebSocket();
                 sockets.add(socket);
                 return FakeConnections.connected(listener, socket);

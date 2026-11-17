@@ -4,7 +4,7 @@
 // encapsulated WebSocketTransport (MVP transport implementation per
 // specs/COMMS.md §2.2) and runs the SimEngine on a fixed ~60 Hz timestep.
 //
-//   ws://localhost:ROBOT_PORT      robot channel   (motorCommand in, sensorSnapshot out)
+//   ws://localhost:ROBOT_PORT      robot channel   (componentCommand in, componentSnapshot out)
 //   ws://localhost:VISUALISER_PORT visualiser channel (worldSnapshot out)
 //
 // Ports default to 8080/8081 and can be overridden via ROBOT_PORT /

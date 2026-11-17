@@ -2,13 +2,15 @@
 // interface (specs/COMMS.md §2, §3).
 //
 // A single Node.js process hosts two WebSocket servers:
-//   - robot channel      on ROBOT_PORT  (bidirectional: motorCommand in, sensorSnapshot out)
+//   - robot channel      on ROBOT_PORT  (bidirectional: componentCommand in, componentSnapshot out)
 //   - visualiser channel on VISUALISER_PORT (unidirectional out: worldSnapshot)
 // The port implies who is talking — there is no clientType field in messages.
 //
 // NDJSON framing: one JSON object per \n-terminated line. Each connection
 // buffers incoming bytes until a newline, then parses exactly one JSON object.
-// Malformed JSON is logged and ignored — never crashes or disconnects.
+// Malformed JSON is logged and ignored — never crashes. A line exceeding
+// MAX_LINE_LENGTH is logged and the connection is dropped so a peer that never
+// sends a newline cannot grow the buffer without bound.
 //
 // Backpressure on the visualiser channel: per visualiser connection at most
 // one unpublished snapshot is queued; a newer snapshot replaces it (drop
@@ -30,20 +32,59 @@ function log(...args: unknown[]): void {
   console.log(`[ws-transport] ${stamp}`, ...args);
 }
 
+// Maximum characters retained for one inbound NDJSON line. Real commands are
+// tiny; this cap only exists so a peer that streams bytes without a newline
+// cannot grow our buffer without bound.
+const MAX_LINE_LENGTH = 64 * 1024;
+
+// Upper bound for shutdown(): a peer that ignores the WebSocket closing
+// handshake must not be able to stall process exit.
+const SHUTDOWN_TIMEOUT_MS = 2000;
+
+const ALLOWED_ORIGIN_HOSTS = new Set([
+  "localhost",
+  "127.0.0.1",
+  "::1",
+  "[::1]", // WHATWG URL keeps the brackets on IPv6 hostnames
+]);
+
 function generateConnectionId(): string {
   return crypto.randomUUID();
 }
 
-// Allow connections with no Origin header (non-browser clients such as the
-// Java robot framework) and any localhost origin. Reject everything else —
-// defense in depth on top of the loopback socket bind.
+// Non-browser clients (the Java robot framework) send no Origin header at all
+// and stay allowed. An explicit `Origin: null` is rejected, as is any scheme
+// other than http/https or a hostname that is not localhost/loopback. This is
+// defence in depth on top of the loopback socket bind.
 function isAllowedOrigin(origin: string | undefined): boolean {
-  if (!origin || origin === "null") return true;
+  if (origin === undefined) return true;
+  if (!origin || origin === "null") return false;
   try {
-    return new URL(origin).hostname === "localhost";
+    const url = new URL(origin);
+    return (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      ALLOWED_ORIGIN_HOSTS.has(url.hostname)
+    );
   } catch {
     return false;
   }
+}
+
+// Resolve once the underlying server has actually bound its port. Bind errors
+// (e.g. EADDRINUSE) reject with the original Error so callers keep its `code`.
+function waitForListening(server: WebSocketServer): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const onListening = () => {
+      server.off("error", onError);
+      resolve();
+    };
+    const onError = (err: Error) => {
+      server.off("listening", onListening);
+      reject(err);
+    };
+    server.once("listening", onListening);
+    server.once("error", onError);
+  });
 }
 
 function isJsonObject(value: unknown): value is Record<string, unknown> {
@@ -92,6 +133,7 @@ class TransportConnection {
   private pending: OutgoingEnvelope | null = null; // depth-1 drop-oldest slot
   private sending = false;
   private closed = false;
+  private closing = false;
 
   public onLine?: (line: string) => void;
   public onClose?: () => void;
@@ -102,10 +144,18 @@ class TransportConnection {
     this.channel = channel;
 
     ws.on("message", (data: Buffer | string) => {
-      if (this.closed) return;
+      if (this.closed || this.closing) return;
       this.buffer += data.toString();
-      let idx: number;
-      while ((idx = this.buffer.indexOf("\n")) >= 0) {
+      // Check the length of every segment (including a trailing partial line)
+      // before dispatching it, so a never-terminated line cannot grow forever.
+      for (;;) {
+        const idx = this.buffer.indexOf("\n");
+        const segmentLength = idx < 0 ? this.buffer.length : idx;
+        if (segmentLength > MAX_LINE_LENGTH) {
+          this.dropForOversizedLine();
+          return;
+        }
+        if (idx < 0) break;
         const line = this.buffer.slice(0, idx);
         this.buffer = this.buffer.slice(idx + 1);
         if (line.trim().length > 0 && this.onLine) {
@@ -126,9 +176,32 @@ class TransportConnection {
     });
   }
 
+  // Drop a peer that sent a line longer than MAX_LINE_LENGTH. `closing` stops
+  // further message processing, but we deliberately leave `closed` false so
+  // the 'close' event still reaches onClose (and safe-stops an active robot).
+  private dropForOversizedLine(): void {
+    if (this.closing || this.closed) return;
+    this.closing = true;
+    this.buffer = "";
+    log(
+      `oversized inbound line (max ${MAX_LINE_LENGTH} chars) on ` +
+        `${this.channel}/${this.connectionId}; closing`,
+    );
+    this.terminateSocket();
+  }
+
   closeSocket(): void {
     try {
       this.ws.close();
+    } catch {
+      // ignore
+    }
+  }
+
+  // Hard-close: destroy the socket without waiting for a closing handshake.
+  terminateSocket(): void {
+    try {
+      this.ws.terminate();
     } catch {
       // ignore
     }
@@ -139,7 +212,7 @@ class TransportConnection {
   // this connection's own seq, so fan-out to N connections yields N independent
   // monotonic sequences.
   send(envelope: OutgoingEnvelope): void {
-    if (this.closed || this.ws.readyState !== WebSocket.OPEN) return;
+    if (this.closed || this.closing || this.ws.readyState !== WebSocket.OPEN) return;
     const outgoing: OutgoingEnvelope = {
       ...envelope,
       seq: this.outgoingSeq++,
@@ -152,7 +225,7 @@ class TransportConnection {
   }
 
   private flush(): void {
-    if (this.closed || !this.pending || this.sending) return;
+    if (this.closed || this.closing || !this.pending || this.sending) return;
     const envelope = this.pending;
     this.pending = null;
     this.sending = true;
@@ -201,13 +274,29 @@ export class WebSocketTransport implements Transport {
       this.accept(ws, "visualiser");
     });
 
-    // Surface listen errors clearly.
+    // Log errors that happen after startup too; waitForListening installs a
+    // short-lived 'error' listener for bind failures and rejects with the
+    // original Error (preserving EADDRINUSE and friends) for main() to handle.
     this.robotServer.on("error", (err: Error) =>
       log("robot channel server error:", err.message)
     );
     this.visualiserServer.on("error", (err: Error) =>
       log("visualiser channel server error:", err.message)
     );
+
+    const bound = await Promise.allSettled([
+      waitForListening(this.robotServer),
+      waitForListening(this.visualiserServer),
+    ]);
+    const failure = bound.find((result) => result.status === "rejected");
+    if (failure) {
+      // Do not leave a half-open transport behind if only one port bound.
+      if (bound[0].status === "fulfilled") this.robotServer.close();
+      if (bound[1].status === "fulfilled") this.visualiserServer.close();
+      this.robotServer = null;
+      this.visualiserServer = null;
+      throw failure.reason;
+    }
 
     log(
       `listening: robot channel on ws://localhost:${options.robotPort}, ` +
@@ -269,14 +358,35 @@ export class WebSocketTransport implements Transport {
   }
 
   async shutdown(): Promise<void> {
+    // Terminate rather than politely close: a peer that never completes the
+    // WebSocket closing handshake would otherwise keep server.close() waiting
+    // forever. Include server.clients so rejected-origin sockets are covered.
     for (const conn of this.connections.values()) {
-      conn.closeSocket();
+      conn.terminateSocket();
     }
     this.connections.clear();
+    for (const server of [this.robotServer, this.visualiserServer]) {
+      if (server) {
+        for (const client of server.clients) client.terminate();
+      }
+    }
+
     const closeServer = (server: WebSocketServer | null): Promise<void> => {
       if (!server) return Promise.resolve();
-      return new Promise((resolve) => server.close(() => resolve()));
+      return new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          resolve();
+        };
+        // Hard upper bound: even a stuck socket cannot stall shutdown/exit.
+        const timer = setTimeout(finish, SHUTDOWN_TIMEOUT_MS);
+        server.close(finish);
+      });
     };
+
     await Promise.all([
       closeServer(this.robotServer),
       closeServer(this.visualiserServer),
