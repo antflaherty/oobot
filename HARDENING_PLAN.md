@@ -33,6 +33,12 @@ resolved in task `D3.c`.
    in-flight edits. Preserve them; make targeted edits only.
 6. Every task ends with its verification commands. A task is not done until
    they pass and the diff is reviewed at the merge gate.
+7. **`next.md` is the user's personal notes and is strictly off-limits for the
+   entire hardening process.** Never read it for task purposes, never edit,
+   stage, commit, move, archive or delete it, and never add ignore rules that
+   would hide it. It must remain exactly as-is and untracked in `git status`
+   through final sign-off. Report any tool or command that would touch it
+   before running it.
 
 ---
 
@@ -60,6 +66,7 @@ agent's own worktree if you dispatch into worktrees).
 >   table. If you need to change a file owned by another task, do not change it
 >   — report it as a coordination note instead.
 > - Several files have in-flight user edits; the plan flags them. Preserve them.
+> - Never touch `next.md` in any way (ground rule 7). It must stay untracked.
 > - Follow the locked decisions. Do not re-decide them; report objections.
 > - No new features, no new message types, no speculative refactors.
 > - Run every verification command listed in your task and report raw results.
@@ -171,7 +178,7 @@ check it before dispatching.
 | `simulator/visualiser/src/liveStream.ts` | `T0.3` then `V2.1` | Sequential. |
 | root docs: `README.md`, `ARCHITECTURE.md`, `MVP.md`, `FUTURE.md`, `DESIGN_REVIEW.md` | `D3.a` | |
 | `specs/**` | `D3.b` | |
-| `AGENTS.md`, component READMEs, `MODERNISATION.md`, `PLAN.md`, `PLAN_SENSORS.md`, `next.md`, `docs/archive/**` | `D3.c` | **User-modified `AGENTS.md` / Java README** — preserve edits. |
+| `AGENTS.md`, component READMEs, `MODERNISATION.md`, `PLAN.md`, `PLAN_SENSORS.md`, `docs/archive/**` | `D3.c` | **User-modified `AGENTS.md` / Java README** — preserve edits. `next.md` is not owned by any task — see ground rule 7. |
 
 ---
 
@@ -651,15 +658,16 @@ the W0 merge gate.
 
 ### `X3.2` — Repo hygiene
 
-- **Lane:** tooling · **Wave:** W2 · **Depends on:** `T0.4` · **Owns:** `.gitignore`, lockfiles, `next.md`, `docs/archive/**`
+- **Lane:** tooling · **Wave:** W2 · **Depends on:** `T0.4` · **Owns:** `.gitignore`, lockfiles
 - **Steps:** stage the three `package-lock.json` files for the merge gate;
-  archive `next.md` into `docs/archive/` or delete it after confirming nothing
-  references it; confirm `robot.jar` remains ignored; mark `MODERNISATION.md`'s
-  verification checklist entries as manual/ad-hoc where no automated test
-  exists.
-- **Acceptance criteria:** no unexplained untracked files at root; lockfiles
-  tracked; no jar committed.
-- **Verify:** `git status --short` is clean except intentional in-flight work.
+  confirm `robot.jar` remains ignored; mark `MODERNISATION.md`'s verification
+  checklist entries as manual/ad-hoc where no automated test exists.
+  **`next.md` is explicitly out of scope — see ground rule 7. Do not stage,
+  ignore, move, edit or delete it.**
+- **Acceptance criteria:** lockfiles tracked; no jar committed; `next.md` still
+  present, unchanged and untracked.
+- **Verify:** `git status --short` shows only `?? next.md` (expected and
+  intentionally left alone) plus any in-flight work being managed by the human.
 
 ---
 
@@ -719,7 +727,8 @@ the W0 merge gate.
   - [ ] Scenario: kill robot; sim safe-stops; robot reconnects and resumes.
   - [ ] Scenario: two visualiser tabs; both render with independent `seq`.
   - [ ] Docs: no stale message names; all commands in README work.
-  - [ ] `git diff --check`; no build artifacts staged.
+  - [ ] `git diff --check`; no build artifacts staged; `next.md` is still
+        present, unchanged and untracked (ground rule 7).
 - **Outcome:** feature work is unfrozen; start a new plan for new features.
 
 ---
