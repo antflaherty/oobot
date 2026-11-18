@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { LiveStream } from '../src/liveStream';
-import type { WorldSnapshot } from '../src/types';
+import type { RobotShape } from '../src/types';
 
 /** Minimal stand-in for the browser WebSocket, cast at the injection point. */
 class FakeWebSocket {
@@ -79,13 +79,22 @@ function makeStream(): Harness {
   };
 }
 
-function snapshotLine(tick: number, x: number, y: number): string {
-  const msg: WorldSnapshot = {
+const TEST_SHAPE: RobotShape = {
+  width: 50,
+  height: 50,
+  wheels: [
+    { angle: Math.PI / 2, offset: 25, length: 30, width: 10 },
+    { angle: -Math.PI / 2, offset: 25, length: 30, width: 10 },
+  ],
+};
+
+function snapshotLine(tick: number, x: number, y: number, shape?: unknown): string {
+  const msg = {
     type: 'worldSnapshot',
     seq: tick,
     simTick: tick,
     payload: {
-      robot: { x, y, heading: 0 },
+      robot: { x, y, heading: 0, ...(shape === undefined ? {} : { shape }) },
       obstacles: [{ x: 10, y: 20, width: 30, height: 40 }],
     },
   };
@@ -398,4 +407,121 @@ test('a close caused by stop() does not schedule a reconnect', () => {
 
   fireTimers();
   assert.equal(sockets.length, 1);
+});
+
+test('getRobotShape caches the latest valid shape from snapshots', () => {
+  const { stream, sockets } = makeStream();
+  stream.start();
+  const ws = sockets[0];
+  assert.ok(ws);
+  ws.open();
+
+  assert.equal(stream.getRobotShape(), null, 'no shape before any snapshot');
+  ws.receive(snapshotLine(1, 0, 0, TEST_SHAPE));
+  assert.deepEqual(stream.getRobotShape(), TEST_SHAPE);
+
+  const revised: RobotShape = {
+    ...TEST_SHAPE,
+    width: 60,
+    wheels: [{ angle: 0, offset: 10, length: 20, width: 8 }],
+  };
+  ws.receive(snapshotLine(2, 0, 0, revised));
+  assert.deepEqual(stream.getRobotShape(), revised, 'the newest shape must win');
+
+  stream.stop();
+});
+
+test('shape cache clears on absent shape, reset, reconnect and tick rollback', () => {
+  const { stream, sockets, setNow, fireTimers } = makeStream();
+  stream.start();
+  const ws1 = sockets[0];
+  assert.ok(ws1);
+  ws1.open();
+
+  ws1.receive(snapshotLine(1, 0, 0, TEST_SHAPE));
+  assert.deepEqual(stream.getRobotShape(), TEST_SHAPE);
+
+  ws1.receive(snapshotLine(2, 0, 0)); // no shape on this snapshot
+  assert.equal(stream.getRobotShape(), null, 'a shapeless snapshot clears the cache');
+
+  ws1.receive(snapshotLine(3, 0, 0, TEST_SHAPE));
+  stream.reset();
+  assert.equal(stream.getRobotShape(), null, 'reset() clears the cache');
+
+  ws1.receive(snapshotLine(4, 0, 0, TEST_SHAPE));
+  ws1.close();
+  fireTimers();
+  const ws2 = sockets[1];
+  assert.ok(ws2);
+  ws2.open();
+  assert.equal(stream.getRobotShape(), null, 'reconnect clears the cache');
+
+  setNow(10);
+  ws2.receive(snapshotLine(100, 0, 0, TEST_SHAPE));
+  setNow(20);
+  ws2.receive(snapshotLine(0, 0, 0)); // rollback + no shape
+  assert.equal(stream.getRobotShape(), null, 'rollback clears the previous session shape');
+
+  // A rollback snapshot carrying a shape starts the new session with that shape.
+  const revised: RobotShape = {
+    ...TEST_SHAPE,
+    width: 40,
+    wheels: [{ angle: 0, offset: 5, length: 20, width: 8 }],
+  };
+  setNow(30);
+  ws2.receive(snapshotLine(50, 0, 0, TEST_SHAPE));
+  setNow(40);
+  ws2.receive(snapshotLine(0, 0, 0, revised));
+  assert.deepEqual(stream.getRobotShape(), revised);
+
+  stream.stop();
+});
+
+test('malformed shapes are treated as absent without dropping snapshots', () => {
+  const { stream, sockets, setNow } = makeStream();
+  stream.start();
+  const ws = sockets[0];
+  assert.ok(ws);
+  ws.open();
+
+  function receiveShape(shapeJson: string, tick: number): void {
+    ws.receive(
+      `{"type":"worldSnapshot","seq":${tick},"simTick":${tick},` +
+        `"payload":{"robot":{"x":1,"y":2,"heading":0,"shape":${shapeJson}},` +
+        `"obstacles":[]}}\n`,
+    );
+  }
+
+  const goodWheel = '{"angle":0,"offset":25,"length":30,"width":10}';
+  const malformed = [
+    'null',
+    '[]',
+    `{"width":1e999,"height":50,"wheels":[${goodWheel}]}`, // Infinity
+    `{"width":50,"height":50,"wheels":[]}`, // no wheels
+    `{"width":"50","height":50,"wheels":[${goodWheel}]}`, // non-number width
+    `{"width":50,"height":50,"wheels":[{"angle":null,"offset":25,"length":30,"width":10}]}`,
+    `{"width":50,"height":50,"wheels":[{"angle":0,"offset":25,"length":30}]}`, // missing width
+    `{"width":50,"height":50,"wheels":[${goodWheel},null]}`,
+  ];
+
+  malformed.forEach((shapeJson, i) => {
+    const tick = i + 1;
+    receiveShape(shapeJson, tick);
+    assert.equal(stream.getRobotShape(), null, `shape ${shapeJson} must be ignored`);
+    assert.equal(stream.getLatestTick(), tick, 'the surrounding snapshot remains valid');
+  });
+
+  setNow(100);
+  const pose = stream.getPoseAt(100);
+  assert.ok(pose);
+  assert.ok(
+    Number.isFinite(pose.pose.x) && Number.isFinite(pose.pose.y) && Number.isFinite(pose.pose.heading),
+    'a bad shape must not produce NaN pose data',
+  );
+
+  // A valid shape after the bad ones is still accepted.
+  receiveShape(JSON.stringify(TEST_SHAPE), malformed.length + 1);
+  assert.deepEqual(stream.getRobotShape(), TEST_SHAPE);
+
+  stream.stop();
 });

@@ -1,11 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SNAPSHOTS, WORLD_WIDTH, WORLD_HEIGHT } from '../src/snapshotStream';
+import { SNAPSHOTS, WORLD_WIDTH, WORLD_HEIGHT, DEFAULT_SHAPE } from '../src/snapshotStream';
 import { wrapAngle } from '../src/math';
 
-// Renderer draws a 7-unit body circle and an 18-unit heading arrow from the
-// pose centre. Allow a small margin when checking the world box.
+// Renderer draws the body shape centred on the pose plus a heading arrow.
+// Allow a small margin when checking the world box.
 const BODY_MARGIN = 20;
 const MOTION_EPS = 1e-6;
 const HEADING_EPS = 1e-6;
@@ -36,6 +36,21 @@ test('every fallback snapshot pose stays inside the world box', () => {
       `snapshot[${i}] tick=${snapshot.simTick}: |y|=${Math.abs(y)} > ${maxY}`,
     );
   });
+});
+
+test('every fallback snapshot carries the default robot shape', () => {
+  assert.ok(SNAPSHOTS.length > 0);
+  SNAPSHOTS.forEach((snapshot, i) => {
+    assert.deepEqual(
+      snapshot.payload.robot.shape,
+      DEFAULT_SHAPE,
+      `snapshot[${i}] tick=${snapshot.simTick} must include the default shape`,
+    );
+  });
+
+  assert.equal(DEFAULT_SHAPE.width, 50);
+  assert.equal(DEFAULT_SHAPE.height, 50);
+  assert.equal(DEFAULT_SHAPE.wheels.length, 2);
 });
 
 test('heading matches direction of travel for every moving snapshot pair', () => {

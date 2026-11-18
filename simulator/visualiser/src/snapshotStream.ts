@@ -1,4 +1,4 @@
-import type { WorldSnapshot } from './types';
+import type { WorldSnapshot, RobotShape } from './types';
 
 // ---------------------------------------------------------------------------
 // Hardcoded stream of `worldSnapshot` messages (fallback).
@@ -11,20 +11,32 @@ import type { WorldSnapshot } from './types';
 export const WORLD_WIDTH = 800;
 export const WORLD_HEIGHT = 600;
 
+// Default robot geometry from the sim (50x50 body, two wheels at +/-pi/2).
+// Used by fallback snapshots and whenever a live snapshot has no valid shape.
+export const DEFAULT_SHAPE: RobotShape = {
+  width: 50,
+  height: 50,
+  wheels: [
+    { angle: Math.PI / 2, offset: 25, length: 30, width: 10 },
+    { angle: -Math.PI / 2, offset: 25, length: 30, width: 10 },
+  ],
+};
+
 // Mirrors simulator/server/worlds/maze.json so the no-sim fallback preview
-// shows the same maze as the live sim. Obstacles are centre-based, matching
-// the sim's Obstacle convention.
+// shows the same world as the live sim. Obstacles are centre-based, matching
+// the sim's Obstacle convention. This is an open arena of chunky blocks:
+// three wall spurs and two free-standing islands, with >=120-unit passages.
 export const MAZE_OBSTACLES = [
-  // Wall 1 (y=-160): spans left edge → near right edge, gap on the RIGHT.
-  { x: -60, y: -160, width: 680, height: 20 },
-  // Wall 2 (y=0): spans near left edge → right edge, gap on the LEFT.
-  { x: 60, y: 0, width: 680, height: 20 },
-  // Wall 3 (y=160): spans left edge → near right edge, gap on the RIGHT.
-  { x: -60, y: 160, width: 680, height: 20 },
-  // Slalom sliver in corridor 2, near the left side.
-  { x: -300, y: -80, width: 20, height: 100 },
-  // Central pillar in corridor 2.
-  { x: 0, y: -80, width: 60, height: 60 },
+  // Bottom wall spur, just right of the start lane.
+  { x: -20, y: -260, width: 160, height: 80 },
+  // Top-right corner spur.
+  { x: 350, y: 230, width: 100, height: 140 },
+  // Upper-left island.
+  { x: -180, y: 40, width: 120, height: 120 },
+  // Top wall spur.
+  { x: -60, y: 260, width: 160, height: 80 },
+  // Lower-right island.
+  { x: 230, y: -80, width: 140, height: 120 },
 ];
 
 // Keyframe poses the robot passes through. The snapshot stream below is
@@ -44,26 +56,30 @@ const KEYFRAMES: Array<{
   y: number;
   heading: number;
 }> = [
-  // Above wall 3, heading right (+X).
-  { tick: 0, x: -200, y: 210, heading: 0 },
-  { tick: 40, x: 300, y: 210, heading: 0 },
-  // Turn to face down (-Y), then pass through wall 3's right-hand gap.
-  { tick: 80, x: 300, y: 210, heading: -Math.PI / 2 },
-  { tick: 120, x: 300, y: 100, heading: -Math.PI / 2 },
-  // Turn to face left (-X), then cross the upper corridor.
-  { tick: 160, x: 300, y: 100, heading: Math.PI },
-  { tick: 200, x: -330, y: 100, heading: Math.PI },
-  // Turn down and use wall 2's left-hand gap (clear of the slalom sliver).
-  { tick: 240, x: -330, y: 100, heading: -Math.PI / 2 },
-  { tick: 280, x: -330, y: -135, heading: -Math.PI / 2 },
-  // Turn right (+X) below the central pillar, then down through wall 1's gap.
-  { tick: 320, x: -330, y: -135, heading: 0 },
-  { tick: 360, x: 320, y: -135, heading: 0 },
-  { tick: 400, x: 320, y: -135, heading: -Math.PI / 2 },
-  { tick: 440, x: 320, y: -210, heading: -Math.PI / 2 },
-  // Turn left (-X) and finish along the bottom of the box.
-  { tick: 480, x: 320, y: -210, heading: Math.PI },
-  { tick: 520, x: -200, y: -210, heading: Math.PI },
+  // Start at the live world's start pose, heading right (+X) along the bottom.
+  { tick: 0, x: -340, y: -240, heading: 0 },
+  { tick: 40, x: -160, y: -240, heading: 0 },
+  // Turn north around the left end of the bottom spur.
+  { tick: 80, x: -160, y: -240, heading: Math.PI / 2 },
+  { tick: 120, x: -160, y: -170, heading: Math.PI / 2 },
+  // Turn east, passing below the lower-right island.
+  { tick: 160, x: -160, y: -170, heading: 0 },
+  { tick: 200, x: 100, y: -170, heading: 0 },
+  // Turn north through the gap between the two islands.
+  { tick: 240, x: 100, y: -170, heading: Math.PI / 2 },
+  { tick: 280, x: 100, y: 40, heading: Math.PI / 2 },
+  // Turn west above the upper-left island.
+  { tick: 320, x: 100, y: 40, heading: Math.PI },
+  { tick: 360, x: -60, y: 40, heading: Math.PI },
+  // Turn north toward the top spur, then west along the top lane.
+  { tick: 400, x: -60, y: 40, heading: Math.PI / 2 },
+  { tick: 440, x: -60, y: 160, heading: Math.PI / 2 },
+  { tick: 480, x: -60, y: 160, heading: Math.PI },
+  { tick: 520, x: -340, y: 160, heading: Math.PI },
+  // Turn south down the left lane and finish back at the start pose.
+  { tick: 560, x: -340, y: 160, heading: -Math.PI / 2 },
+  { tick: 600, x: -340, y: -240, heading: -Math.PI / 2 },
+  { tick: 640, x: -340, y: -240, heading: 0 },
 ];
 
 // Emit one snapshot every N simTicks (~every 133ms at a 60Hz sim).
@@ -107,7 +123,19 @@ export const SNAPSHOTS: WorldSnapshot[] = (() => {
       type: 'worldSnapshot',
       seq: seq++,
       simTick: tick,
-      payload: { robot: { x: pose.x, y: pose.y, heading: pose.heading }, obstacles: MAZE_OBSTACLES },
+      payload: {
+        robot: {
+          x: pose.x,
+          y: pose.y,
+          heading: pose.heading,
+          shape: {
+            width: DEFAULT_SHAPE.width,
+            height: DEFAULT_SHAPE.height,
+            wheels: DEFAULT_SHAPE.wheels.map((wheel) => ({ ...wheel })),
+          },
+        },
+        obstacles: MAZE_OBSTACLES,
+      },
     });
   }
   return snaps;

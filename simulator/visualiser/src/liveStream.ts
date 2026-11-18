@@ -11,7 +11,7 @@
 // `new LiveStream()` in main.ts keeps working unchanged.
 // ---------------------------------------------------------------------------
 
-import type { WorldSnapshot, RobotPose, Obstacle } from './types';
+import type { WorldSnapshot, RobotPose, Obstacle, RobotShape } from './types';
 import { angleLerp, clamp01, lerp } from './math';
 
 const VISUALISER_PORT = 8081;
@@ -42,6 +42,35 @@ function isFiniteNumber(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
+/** Defensively narrow an optional wire shape so malformed data cannot reach canvas draws. */
+function parseRobotShape(value: unknown): RobotShape | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const shape = value as {
+    width?: unknown;
+    height?: unknown;
+    wheels?: unknown;
+  };
+  if (!isFiniteNumber(shape.width) || !isFiniteNumber(shape.height)) return null;
+  if (!Array.isArray(shape.wheels) || shape.wheels.length === 0) return null;
+
+  const wheelsValid = shape.wheels.every((wheel: unknown) => {
+    if (typeof wheel !== 'object' || wheel === null || Array.isArray(wheel)) return false;
+    const w = wheel as {
+      angle?: unknown;
+      offset?: unknown;
+      length?: unknown;
+      width?: unknown;
+    };
+    return (
+      isFiniteNumber(w.angle) &&
+      isFiniteNumber(w.offset) &&
+      isFiniteNumber(w.length) &&
+      isFiniteNumber(w.width)
+    );
+  });
+  return wheelsValid ? (value as RobotShape) : null;
+}
+
 /** Narrow a parsed NDJSON line to a snapshot whose fields are safe to render. */
 function isValidSnapshot(value: unknown): value is WorldSnapshot {
   if (typeof value !== 'object' || value === null) return false;
@@ -69,6 +98,7 @@ export class LiveStream {
   private shouldReconnect = false;
   private reconnectTimer: number | null = null;
   private latestObstacles: Obstacle[] = [];
+  private latestRobotShape: RobotShape | null = null;
   private onTrailPoint: ((x: number, y: number) => void) | null = null;
   private onTrailReset: (() => void) | null = null;
 
@@ -128,6 +158,11 @@ export class LiveStream {
     return this.latestObstacles;
   }
 
+  /** Returns the latest valid robot shape, or null when absent/invalid. */
+  getRobotShape(): RobotShape | null {
+    return this.latestRobotShape;
+  }
+
   /** Register a callback invoked with each new snapshot's robot pose so the
    * trail can be recorded from the authoritative position stream rather than
    * from render frames (which pause while the tab is hidden). */
@@ -150,6 +185,7 @@ export class LiveStream {
     this.baseTick = 0;
     this.baseTime = 0;
     this.latestObstacles = [];
+    this.latestRobotShape = null;
     this.lineBuffer = '';
     this.onTrailReset?.();
   }
@@ -295,6 +331,9 @@ export class LiveStream {
     // Obstacles are static but re-cache on each snapshot in case the world
     // changes (e.g. reload). Default to empty if absent.
     this.latestObstacles = snapshot.payload.obstacles ?? [];
+    // Shape is optional on the wire: absent or malformed data clears the cache
+    // so the renderer falls back to its default geometry instead of drawing NaN.
+    this.latestRobotShape = parseRobotShape(snapshot.payload.robot.shape);
 
     // Record the trail point from the authoritative snapshot stream so the
     // path keeps tracing even while requestAnimationFrame is paused (tab hidden).

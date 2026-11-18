@@ -1,6 +1,9 @@
-import type { RobotPose, WorldSnapshot, Obstacle } from "./types";
-import { WORLD_WIDTH, WORLD_HEIGHT } from "./snapshotStream";
+import type { RobotPose, WorldSnapshot, Obstacle, RobotShape } from "./types";
+import { WORLD_WIDTH, WORLD_HEIGHT, DEFAULT_SHAPE } from "./snapshotStream";
 import { lerp } from "./math";
+
+// Re-exported so callers/tests can use the same fallback geometry the renderer uses.
+export { DEFAULT_SHAPE };
 
 // Canvas coordinate mapping (MVP decision, documented here):
 //
@@ -21,16 +24,38 @@ import { lerp } from "./math";
 // This is a rendering convention only; the wire protocol itself is
 // coordinate-system agnostic.
 
-const ROBOT_RADIUS = 7;
 const ARROW_LENGTH = 18;
 const ARROW_WIDTH = 4;
 
-const BOX_STROKE = "#374151";
+const BOX_STROKE = "#0f172a"; // dark boundary (canvas background is set in index.html)
 const BODY_FILL = "#2563eb";
 const BODY_STROKE = "#1e40af";
+const WHEEL_FILL = "#334155";
+const WHEEL_STROKE = "#0f172a";
 const ARROW_FILL = "#ffffff";
-const OBSTACLE_FILL = "#4b5563";
-const OBSTACLE_STROKE = "#111827";
+const OBSTACLE_FILL = "#1e293b"; // dark obstacles
+const OBSTACLE_STROKE = "#0f172a";
+
+/** A wheel rectangle in body-local CANVAS coordinates (X right, Y down),
+ * before the heading rotation is applied. Dimensions are full extents. */
+export interface WheelRect {
+  x: number;
+  y: number;
+  length: number; // along the body's local X axis (the heading)
+  width: number;  // along the body's local Y axis
+}
+
+/** Pure geometry: mount each wheel at offset*(cos angle, sin angle) in world
+ * body coordinates, flipped to canvas Y-down. The renderer rotates the whole
+ * body by -heading, so the wheel's long axis stays aligned with the heading. */
+export function robotWheelRects(shape: RobotShape): WheelRect[] {
+  return shape.wheels.map((wheel) => ({
+    x: wheel.offset * Math.cos(wheel.angle),
+    y: -wheel.offset * Math.sin(wheel.angle),
+    length: wheel.length,
+    width: wheel.width,
+  }));
+}
 
 // ---------------------------------------------------------------------------
 // Robot trail configuration.
@@ -50,7 +75,7 @@ const DEFAULT_TRAIL_CONFIG: TrailConfig = {
   maxPoints: 100,
   minAlpha: 0.15,
   maxAlpha: 0.9,
-  color: "#93c5fd", // light blue
+  color: "#3b82f6", // blue — visible against the light canvas background
 };
 
 // Ignore points closer than this (world units) to avoid duplicate points
@@ -149,16 +174,9 @@ export class Renderer {
   drawWorld(): void {
     const { ctx } = this;
     ctx.strokeStyle = BOX_STROKE;
-    ctx.lineWidth = 2;
+    ctx.lineWidth = 3;
     ctx.beginPath();
     ctx.rect(0, 0, WORLD_WIDTH, WORLD_HEIGHT);
-    ctx.stroke();
-
-    // Subtle inner rect so the box edge is visible against dark backgrounds.
-    ctx.strokeStyle = "#1f2937";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.rect(2, 2, WORLD_WIDTH - 4, WORLD_HEIGHT - 4);
     ctx.stroke();
   }
 
@@ -181,9 +199,10 @@ export class Renderer {
     }
   }
 
-  /** Draw the robot as a body circle plus a heading arrow. */
-  drawRobot(pose: RobotPose): void {
+  /** Draw the robot as a rectangle body, two mounted wheels and a heading arrow. */
+  drawRobot(pose: RobotPose, shape: RobotShape | null = DEFAULT_SHAPE): void {
     const { ctx } = this;
+    const bodyShape = shape ?? DEFAULT_SHAPE;
     // World origin (0,0) maps to canvas centre (400,300). World +Y is up, so
     // flip it to screen +Y down.
     const cx = (pose.x + WORLD_WIDTH / 2) * this.pxPerUnit;
@@ -196,9 +215,29 @@ export class Renderer {
     // +Y up), so negate to convert. heading 0 = points right (+X axis).
     ctx.rotate(-pose.heading);
 
-    // Body: filled circle.
+    // Wheels first so the body overlaps their inner halves: each is a darker
+    // rectangle at its rotated mount point, long axis along local X (heading).
+    for (const wheel of robotWheelRects(bodyShape)) {
+      ctx.save();
+      ctx.translate(wheel.x, wheel.y);
+      const left = -wheel.length / 2;
+      const top = -wheel.width / 2;
+      ctx.fillStyle = WHEEL_FILL;
+      ctx.strokeStyle = WHEEL_STROKE;
+      ctx.lineWidth = 1;
+      ctx.fillRect(left, top, wheel.length, wheel.width);
+      ctx.strokeRect(left, top, wheel.length, wheel.width);
+      ctx.restore();
+    }
+
+    // Body: filled square/rectangle centred on the pose.
     ctx.beginPath();
-    ctx.arc(0, 0, ROBOT_RADIUS, 0, 2 * Math.PI);
+    ctx.rect(
+      -bodyShape.width / 2,
+      -bodyShape.height / 2,
+      bodyShape.width,
+      bodyShape.height,
+    );
     ctx.fillStyle = BODY_FILL;
     ctx.fill();
     ctx.strokeStyle = BODY_STROKE;
@@ -224,11 +263,15 @@ export class Renderer {
    * arrive, not here per render frame, so the trail keeps tracing while the tab is hidden
    * (requestAnimationFrame pauses) instead of drawing one jump line on return.
    */
-  render(pose: RobotPose, obstacles: Obstacle[] = []): void {
+  render(
+    pose: RobotPose,
+    obstacles: Obstacle[] = [],
+    shape: RobotShape | null = DEFAULT_SHAPE,
+  ): void {
     this.clear();
     this.drawTrail();
     this.drawWorld();
     this.drawObstacles(obstacles);
-    this.drawRobot(pose);
+    this.drawRobot(pose, shape);
   }
 }

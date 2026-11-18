@@ -16,6 +16,21 @@ export interface Obstacle {
   height: number; // full height, world units
 }
 
+// Physical robot geometry published by the sim, in WORLD UNITS.
+// Angles are radians relative to the robot heading (0 = forward, + = CCW).
+// Wheel local centre = offset * (cos(angle), sin(angle)); the wheel's long axis
+// follows the heading (it rolls tangentially).
+export interface RobotShape {
+  width: number;   // full body width, world units
+  height: number;  // full body height, world units
+  wheels: Array<{
+    angle: number;
+    offset: number;
+    length: number; // long axis, along the heading
+    width: number;  // short axis
+  }>;
+}
+
 // worldSnapshot payload — see specs/WIRE_PROTOCOL.md §6.2
 export interface WorldSnapshotPayload {
   robot: {
@@ -24,6 +39,8 @@ export interface WorldSnapshotPayload {
     y: number;
     // Robot heading in radians; 0 = +X axis
     heading: number;
+    // Optional for older/fallback snapshots; the sim always sends it.
+    shape?: RobotShape;
   };
   obstacles: Obstacle[]; // static obstacles (iteration 2)
 }

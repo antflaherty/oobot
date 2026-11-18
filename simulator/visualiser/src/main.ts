@@ -10,7 +10,7 @@
 // ---------------------------------------------------------------------------
 
 import type { WorldSnapshot, RobotPose } from './types';
-import { SNAPSHOTS, FINAL_SNAPSHOT_TICK } from './snapshotStream';
+import { SNAPSHOTS, FINAL_SNAPSHOT_TICK, DEFAULT_SHAPE } from './snapshotStream';
 import { angleLerp, clamp01 } from './math';
 import { Renderer } from './renderer';
 import { LiveStream, PoseResult } from './liveStream';
@@ -156,7 +156,10 @@ function frame(): void {
     }
 
     const obstacles = liveStream.getObstacles();
-    renderer.render(result.pose, obstacles);
+    // Live geometry comes from the cached sim shape (null falls back in the
+    // renderer); the hardcoded stream always uses the static default shape.
+    const shape = usingLive ? liveStream.getRobotShape() : DEFAULT_SHAPE;
+    renderer.render(result.pose, obstacles, shape);
     logRender(result.pose, source, result.holding);
   }
 
