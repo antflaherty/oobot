@@ -22,6 +22,7 @@ import oobot.robot.student.Brain;
 import oobot.robot.student.Mover;
 import oobot.robot.student.ProximitySensor;
 import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Tool;
 import oobot.robot.student.Wheel;
 import oobot.robot.transport.ComponentCommandMessage;
 import oobot.robot.transport.ComponentValue;
@@ -213,6 +214,131 @@ class SimRobotLifecycleTest {
     }
 
     @Test
+    void toolAndWheelChangesShareOneFrame() throws Exception {
+        try (Harness h = new Harness(descriptionWithTool())) {
+            h.awaitConnected();
+            FakeWebSocket socket = h.socket(0);
+            Tool tool = (Tool) h.robot.components().component("front-light");
+
+            tool.activate();
+            h.robot.components().wheel("left-wheel").clockwise();
+            assertTrue(socket.sentFrames().isEmpty(),
+                    "tool and wheel calls must only mutate local state during a tick");
+
+            h.robot.flushCommands();
+            assertEquals(1, socket.sentFrames().size(),
+                    "wheel and tool changes in one tick must produce one frame");
+            ComponentCommandMessage cmd = lastCommand(socket);
+            assertEquals(Set.of("left-wheel", "right-wheel", "front-light"),
+                    values(cmd).keySet());
+            assertEquals(1.0, values(cmd).get("front-light"));
+            assertEquals(0L, cmd.seq());
+
+            h.robot.flushCommands();
+            assertEquals(1, socket.sentFrames().size(), "an idle flush sends nothing");
+        }
+    }
+
+    @Test
+    void toolOnlyFlushSendsOneFrameAndRepeatedCallsAreIdempotent() throws Exception {
+        try (Harness h = new Harness(descriptionWithTool())) {
+            h.awaitConnected();
+            FakeWebSocket socket = h.socket(0);
+            Tool tool = (Tool) h.robot.components().component("front-light");
+
+            tool.activate();
+            tool.activate();
+            h.robot.flushCommands();
+            assertEquals(1, socket.sentFrames().size());
+            assertEquals(1.0, values(lastCommand(socket)).get("front-light"));
+
+            h.robot.flushCommands();
+            assertEquals(1, socket.sentFrames().size(), "an idle flush sends nothing");
+
+            tool.deactivate();
+            tool.deactivate();
+            h.robot.flushCommands();
+            assertEquals(2, socket.sentFrames().size());
+            assertEquals(0.0, values(lastCommand(socket)).get("front-light"));
+        }
+    }
+
+    @Test
+    void safeStopFrameStillContainsOnlyWheelsWhenToolIsActive() throws Exception {
+        try (Harness h = new Harness(descriptionWithTool())) {
+            h.awaitConnected();
+            FakeWebSocket socket = h.socket(0);
+            Tool tool = (Tool) h.robot.components().component("front-light");
+            tool.activate();
+            h.robot.flushCommands();
+
+            socket.listener().onClosed(socket, 1000, "peer");
+
+            assertEquals(Set.of("left-wheel", "right-wheel"),
+                    values(lastCommand(socket)).keySet(),
+                    "the D-2 zero frame must not contain tool entries");
+            assertTrue(h.robot.toolActive("front-light"), "tool state must survive disconnect");
+        }
+    }
+
+    @Test
+    void toolStateIsResentAfterReconnectEvenWhenAFlushIsDroppedWhileDisconnected() throws Exception {
+        try (Harness h = new Harness(descriptionWithTool())) {
+            h.awaitConnected();
+            FakeWebSocket first = h.socket(0);
+            Tool tool = (Tool) h.robot.components().component("front-light");
+            tool.activate();
+            h.robot.flushCommands();
+            assertEquals(1.0, values(lastCommand(first)).get("front-light"));
+
+            first.listener().onClosed(first, 1000, "peer");
+            int framesAfterClose = first.sentFrames().size();
+            h.robot.flushCommands(); // dirty flag drops, persistent tool state must not
+            assertEquals(framesAfterClose, first.sentFrames().size());
+            assertTrue(h.robot.toolActive("front-light"));
+
+            h.awaitSocketCount(2);
+            h.awaitConnected();
+            FakeWebSocket second = h.socket(1);
+            h.robot.flushCommands();
+            assertEquals(1, second.sentFrames().size(), "reconnect must force a resync frame");
+            ComponentCommandMessage resync = lastCommand(second);
+            assertEquals(0L, resync.seq());
+            assertEquals(1.0, values(resync).get("front-light"));
+        }
+    }
+
+    @Test
+    void toolChangeWhileDisconnectedIsNotLostOnReconnect() throws Exception {
+        try (Harness h = new Harness(descriptionWithTool())) {
+            h.awaitConnected();
+            FakeWebSocket first = h.socket(0);
+            Tool tool = (Tool) h.robot.components().component("front-light");
+            tool.activate();
+            h.robot.flushCommands();
+
+            first.listener().onClosed(first, 1000, "peer");
+            tool.deactivate(); // state changes while the socket is down
+            h.robot.flushCommands(); // dropped, but toolValues keeps the new state
+
+            h.awaitSocketCount(2);
+            h.awaitConnected();
+            FakeWebSocket second = h.socket(1);
+            h.robot.flushCommands();
+            assertEquals(0.0, values(lastCommand(second)).get("front-light"));
+            assertFalse(h.robot.toolActive("front-light"));
+        }
+    }
+
+    @Test
+    void toolsAreReturnedInManifestDeclarationOrder() throws Exception {
+        try (Harness h = new Harness(descriptionWithTwoTools())) {
+            assertEquals(List.of("front-light", "rear-tool"),
+                    h.robot.components().tools().stream().map(Tool::id).toList());
+        }
+    }
+
+    @Test
     void oneFramePerTickRegardlessOfWheelCount() throws Exception {
         RobotDescription fourWheels = new RobotDescription("four-wheels", List.of(
                 new ComponentDescription("left-front", ComponentType.WHEEL, Math.PI / 2, 0.25),
@@ -270,6 +396,7 @@ class SimRobotLifecycleTest {
             @Override public Mover mover() { return null; }
             @Override public ProximitySensor frontSensor() { return null; }
             @Override public ProximitySensor rightSensor() { return null; }
+            @Override public Tool tool() { return Tool.NOOP; }
             @Override public void setBehaviour(RobotBehaviour behaviour) { }
             @Override public void tick() { }
         };
@@ -280,6 +407,25 @@ class SimRobotLifecycleTest {
         while (!loop.isTerminated() && System.nanoTime() < deadline) {
             Thread.sleep(10);
         }
+    }
+
+    private static RobotDescription descriptionWithTool() {
+        return new RobotDescription("test-layout-with-tool", List.of(
+                new ComponentDescription("left-wheel", ComponentType.WHEEL, Math.PI / 2, 0.25),
+                new ComponentDescription("right-wheel", ComponentType.WHEEL, -Math.PI / 2, 0.25),
+                new ComponentDescription("front-sensor", ComponentType.PROXIMITY_SENSOR, 0.0, 0.0),
+                new ComponentDescription("right-sensor", ComponentType.PROXIMITY_SENSOR, -Math.PI / 2, 0.0),
+                new ComponentDescription("front-light", ComponentType.TOOL, 0.0, 0.0)));
+    }
+
+    private static RobotDescription descriptionWithTwoTools() {
+        return new RobotDescription("test-layout-with-two-tools", List.of(
+                new ComponentDescription("left-wheel", ComponentType.WHEEL, Math.PI / 2, 0.25),
+                new ComponentDescription("right-wheel", ComponentType.WHEEL, -Math.PI / 2, 0.25),
+                new ComponentDescription("front-sensor", ComponentType.PROXIMITY_SENSOR, 0.0, 0.0),
+                new ComponentDescription("right-sensor", ComponentType.PROXIMITY_SENSOR, -Math.PI / 2, 0.0),
+                new ComponentDescription("front-light", ComponentType.TOOL, 0.0, 0.0),
+                new ComponentDescription("rear-tool", ComponentType.TOOL, Math.PI, 0.0)));
     }
 
     private static RobotDescription description() {
@@ -294,6 +440,11 @@ class SimRobotLifecycleTest {
         return "{\"type\":\"componentSnapshot\",\"seq\":0,\"simTick\":" + simTick
                 + ",\"payload\":{\"readings\":[{\"id\":\"front-sensor\",\"value\":"
                 + (frontValue == null ? "null" : frontValue) + "}]}}\n";
+    }
+
+    private static Map<String, Double> values(ComponentCommandMessage command) {
+        return command.payload().commands().stream()
+                .collect(Collectors.toMap(ComponentValue::id, ComponentValue::value));
     }
 
     private static ComponentCommandMessage lastCommand(FakeWebSocket socket) {

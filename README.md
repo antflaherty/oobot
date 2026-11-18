@@ -15,11 +15,11 @@ This is a technical proof of concept, not a complete learning product. See
 |   process        |  (NDJSON)                |   (Node/TS)            |
 |                  |  componentCommand ---->  |  60 Hz timestep,       |
 |  Robot framework |  <---- componentSnapshot |  world + obstacles,    |
-|  behaviour loop  |  (one reading per sensor)|  manifest sensors      |
+|  behaviour loop  |  (one reading per sensor)|  manifest components   |
 +--------+---------+                          +-----------+------------+
          ^                                                | visualiser channel
          | Gradle fat JAR, OkHttp/Jackson                 | ws://localhost:8081 (NDJSON)
-         |                                                | worldSnapshot (robot + obstacles)
+         |                                                | worldSnapshot (robot + tools + obstacles)
          |                                                v
          |                                     +------------------------+
          +-------------------------------------+  Visualiser            |
@@ -32,16 +32,17 @@ This is a technical proof of concept, not a complete learning product. See
 The simulation owns world state and advances on its own fixed ~60 Hz timestep.
 The robot sends `componentCommand` messages (one batched frame per behaviour
 tick) and receives `componentSnapshot` messages with one reading per declared
-proximity sensor. The visualiser receives `worldSnapshot` messages containing
-the robot pose and the obstacle list, and renders with hold-last-frame plus
-interpolation. Rendering never drives or blocks simulation timing; the
-visualiser channel is unidirectional.
+proximity sensor. Tools use the same `componentCommand` payload (`1.0` active,
+`0.0` inactive). The visualiser receives `worldSnapshot` messages containing
+the robot pose, tool states and the obstacle list, and renders with
+hold-last-frame plus interpolation. Rendering never drives or blocks simulation
+timing; the visualiser channel is unidirectional.
 
 ## Monorepo layout
 
 ```
 oobot/
-├── robots/default.json          # shared v2 component manifest (wheels + 2 sensors)
+├── robots/default.json          # shared manifest (wheels, 2 sensors, front-light tool)
 ├── simulator/
 │   ├── server/                  # Node.js/TypeScript sim + WebSocket server
 │   │   ├── src/                 # index, sim, world, sensor, transport, types,
@@ -52,7 +53,7 @@ oobot/
 │   ├── robot.jar                # local build output from `npm run build:robot`
 │   └── src/main/java/oobot/robot/
 │       ├── student/             # RobotBehaviour, Mover, Brain, Component,
-│       │                        # Wheel, ProximitySensor, BrownianMotionBehaviour
+│       │                        # Wheel, ProximitySensor, Tool, BrownianMotionBehaviour
 │       └── example/             # WheeledMover, DefaultBrain and five examples
 ├── specs/                       # wire protocol, components, sensors, launch,
 │                                 # robot description, world format
@@ -104,14 +105,15 @@ names above. The default manifest path is resolved against the framework
 directory (the JAR's parent), and invalid CLI values, a missing manifest or a
 missing required sensor id produce a usage-style error with exit code 2.
 
-## Component model and sensors
+## Component model, sensors and tool
 
 Both the sim and the Java controller load the same v2 manifest at startup; the
 visualiser does not. `robots/default.json` declares two wheels (`left-wheel`,
-`right-wheel`, each with a mount `angle` and radial `offset` of `0.25`) and two
-proximity sensors (`front-sensor` at 0 rad, `right-sensor` at −π/2 rad). Wheel
-roles and the track width (`0.5`) are derived from those angles and offsets;
-there is no `side` field.
+`right-wheel`, each with a mount `angle` and radial `offset` of `0.25`), two
+proximity sensors (`front-sensor` at 0 rad, `right-sensor` at −π/2 rad) and a
+`front-light` tool at 0 rad. Wheel roles and the track width (`0.5`) are derived
+from the wheel angles and offsets; there is no `side` field. Tools declare a
+finite `angle` but no `offset`, and affect no geometry or kinematics.
 
 Sensor readings are ray-cast from the robot centre along `pose.heading + angle`
 against both the box edges and the static obstacles. The nearest hit becomes
@@ -120,9 +122,18 @@ the component's reading in world units, or `null` on the wire (mapped to
 also exposes `latestSimTick()` so a behaviour can detect stale data.
 
 The wire and component model are id-addressed, but the student-facing `Brain`
-accessors are deliberately **fixed-id**: `frontSensor()` resolves
+sensor accessors are deliberately **fixed-id**: `frontSensor()` resolves
 `front-sensor` and `rightSensor()` resolves `right-sensor`. The controller fails
-fast with a clear message if either is missing from the manifest.
+fast with a clear message if either is missing from the manifest. `tool()` is
+instead a single reference injected by type: the one manifest tool, or
+`Tool.NOOP` if none is declared; more than one tool is a startup error.
+
+The sim tracks tool state per id and publishes it in
+`worldSnapshot.robot.toolStates`; commands use the existing `componentCommand`
+payload (`1.0` active, `0.0` inactive, any other value ignored). The default
+`wall-follow-right` behaviour switches the front light ON in `APPROACH`, `DRIVE`
+and `TURN_RIGHT_AT_END`, and OFF in `SEARCH`, `AVOID`, `RECOVER_BACKUP`,
+`RECOVER_TURN` and `init()`.
 
 ## Wire channels and safety
 
@@ -133,14 +144,17 @@ fast with a clear message if either is missing from the manifest.
   one tick old are ignored.
 - Visualiser channel (`ws://localhost:8081`): `worldSnapshot` (sim →
   visualiser) only. Per-connection send slots are depth-1 drop-oldest, so a slow
-  browser never blocks the sim.
+  browser never blocks the sim. It carries `toolStates`; the visualiser draws a
+  small front circle for `front-light` (red `#ef4444` active, darker blue
+  `#1d4ed8` inactive).
 - Both servers bind `0.0.0.0` for IPv4 clients and accept only localhost origins
   (or no Origin header).
-- Safe stop is two-layered: the sim zeroes its actuator state when the active
-  robot disconnects or it shuts down, and the Java bridge writes one explicit
-  zero command for all wheels *before* closing or reconnecting its socket.
-- Visualiser state (snapshots, clock, obstacles and trail) resets on every
-  connect/reconnect, including a sim tick rollback.
+- Safe stop is two-layered: the sim zeroes its actuator state and clears tool
+  states when the active robot disconnects or it shuts down, and the Java bridge
+  writes one explicit wheels-only zero command for all wheels *before* closing
+  or reconnecting its socket (tool state is force-resynced on reconnect).
+- Visualiser state (snapshots, clock, obstacles, cached tool states and trail)
+  resets on every connect/reconnect, including a sim tick rollback.
 
 ## MVP success criteria
 
@@ -159,6 +173,8 @@ fast with a clear message if either is missing from the manifest.
 8. The manifest, world file and behaviour are configurable from the CLI: invalid
    manifests, behaviours or required sensor ids are usage-style errors, while an
    unusable world file is reported with a warning and an empty-world fallback.
+9. The front-light tool is switched through `componentCommand`, reflected in
+   `worldSnapshot.robot.toolStates` and drawn by the visualiser.
 
 ## Docs & specs
 

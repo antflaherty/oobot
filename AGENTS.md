@@ -37,7 +37,7 @@ oobot/
 │   ├── dev.js                # one-command dev startup (sim → viz → robot)
 │   └── runRobot.js           # starts robot.jar with an absolute --robot path
 ├── robots/
-│   └── default.json          # v2 component layout (id, type, angle, offset)
+│   └── default.json          # v2 component layout (id, type, angle, wheel offset)
 ├── simulator/
 │   ├── server/               # Node.js/TS sim + WebSocket server (ports 8080/8081)
 │   │   ├── src/index.ts      # entry point (--robot, --world, port env vars)
@@ -80,6 +80,7 @@ oobot/
 │       │   ├── Component.java       # generic id-addressed component (id only)
 │       │   ├── Wheel.java           # student-facing wheel component
 │       │   ├── ProximitySensor.java # student-facing proximity component
+│       │   ├── Tool.java            # student on/off tool; Tool.NOOP when none
 │       │   └── BrownianMotionBehaviour.java  # opt-in behaviour (not the default)
 │       ├── example/               # example implementations (reference, not student)
 │       │   ├── WheeledMover.java    # reference Mover implementation
@@ -98,7 +99,8 @@ oobot/
 │       ├── bridge/sim/            # sim bridge (not student)
 │       │   ├── SimRobot.java      # lifecycle, batching, two-layer safe stop
 │       │   ├── SimProximitySensor.java
-│       │   └── SimWheel.java
+│       │   ├── SimWheel.java
+│       │   └── SimTool.java       # per-tool state, batched with wheels
 │       └── transport/             # transport (not student)
 │           ├── WsConnection.java    # OkHttp WebSocket client
 │           ├── Json.java            # Jackson serialisation
@@ -180,8 +182,8 @@ obstacles and robot shape from `worldSnapshot.payload`.
     `payload.readings: [{id, value|null}]`). Persistent, bidirectional; single
     active robot slot (a new robot closes the previous one).
   - **Visualiser channel** `ws://localhost:8081` — `worldSnapshot`
-    (`payload.robot: {x, y, heading, shape?}` in world units,
-    `payload.obstacles: [...]`) (sim→visualiser).
+    (`payload.robot: {x, y, heading, shape?, toolStates?: [{id, active}]}`,
+    shape in world units, `payload.obstacles: [...]`) (sim→visualiser).
     Unidirectional (MVP); multiple tabs are supported.
 - Ports default to 8080/8081 and can be overridden via `ROBOT_PORT` /
   `VISUALISER_PORT` (validated as integers in 1–65535).
@@ -192,13 +194,15 @@ obstacles and robot shape from `worldSnapshot.payload`.
   `simTick` must be finite non-negative integers, `seq` must strictly increase
   and `simTick` must be no more than one tick older than the last accepted
   command (D-4). Rejected commands never touch actuator state.
-- **Safe stop has two independent layers (D-2):** the sim zeroes motors when the
-  active robot socket closes (and on shutdown); the Java bridge writes one
-  `componentCommand` with every wheel id at `0.0` **before** closing or
-  reconnecting the socket. No heartbeat/timeout yet. Java batches all wheel
+- **Safe stop has two independent layers (D-2):** the sim zeroes motors and
+  clears tool states when the active robot socket closes (and on shutdown); the
+  Java bridge writes one wheels-only `componentCommand` with every wheel id at
+  `0.0` **before** closing or reconnecting the socket, then force-resyncs tool
+  state on reconnect. No heartbeat/timeout yet. Java batches all wheel/tool
   changes from a behaviour tick into a single command frame.
-- Visualiser state (snapshot buffer, interpolation clock, trail) resets on every
-  connect/reconnect and when `simTick` goes backwards (D-5).
+- Visualiser state (snapshot buffer, interpolation clock, trail, cached tool
+  states) resets on every connect/reconnect and when `simTick` goes backwards
+  (D-5).
 
 Full spec: `specs/WIRE_PROTOCOL.md`. Transport interface: `specs/COMMS.md`.
 Locked decisions: `docs/DECISIONS.md`.
@@ -224,18 +228,23 @@ and use the components exposed by their `Brain`.
   recent reading) and `distance()` in its mounted direction (`Infinity` if
   nothing detected). `latestSimTick()` lets behaviour code detect stale data;
   the bridge's staleness threshold is 30 sim ticks.
+- **`Tool`** — a `Component` with `activate()` / `deactivate()`; the controller
+  injects the single manifest tool, or `Tool.NOOP` when none is declared. Tools
+  have no geometry or kinematics effect.
 - **`Mover`** — high-level wheel-to-movement abstraction: translates
   `forward()` / `backward()` / `turnRight()` / `turnLeft()` / `stop()` into
   per-wheel actions.
-- **`Brain`** — the DI/wiring interface: exposes `mover()`, `frontSensor()` and
-  `rightSensor()`, plus `setBehaviour(...)` and `tick()`. **Constraint (D-3):**
-  these accessors are fixed-id, not generic — `frontSensor()` must resolve
-  `front-sensor` and `rightSensor()` must resolve `right-sensor`; the controller
-  fails at startup if either `proximitySensor` id is missing. A manifest may
-  declare other sensors, but this API cannot address them.
+- **`Brain`** — the DI/wiring interface: exposes `mover()`, `frontSensor()`,
+  `rightSensor()` and `tool()`, plus `setBehaviour(...)` and `tick()`.
+  **Constraint (D-3):** the sensor accessors are fixed-id, not generic —
+  `frontSensor()` must resolve `front-sensor` and `rightSensor()` must resolve
+  `right-sensor`; the controller fails at startup if either `proximitySensor`
+  id is missing. A manifest may declare other sensors, but this API cannot
+  address them. `tool()` is a single type-based reference: the one manifest
+  tool (or `Tool.NOOP`); more than one tool is a startup error.
 
 Student code never touches sockets, JSON, motor power values, or wheel mounting —
-it uses the `Mover` and sensors exposed by its `Brain`. The behaviour loop
+it uses the `Mover`, sensors and tool exposed by its `Brain`. The behaviour loop
 (`oobot.robot.core.BehaviourLoop`) calls `Brain.tick()` at ~20 Hz.
 
 ### Mount-angle convention
@@ -243,8 +252,9 @@ it uses the `Mover` and sensors exposed by its `Brain`. The behaviour loop
 Components are placed by **mount angle** plus a radial **offset**, declared in
 the v2 manifest `robots/default.json`. `angle` is in radians: 0 = robot forward,
 positive = counter-clockwise (right = -π/2). `offset` is the radial distance
-from the robot centre (wheels only; default `0.25`, must be finite and > 0).
-Wheels still roll along the robot's heading (tangentially); each sensor casts a
+from the robot centre (wheels only; default `0.25`, must be finite and > 0);
+tools declare `angle` but no `offset`. Wheels still roll along the robot's
+heading (tangentially); each sensor casts a
 ray along `pose.heading + component.angle` against box edges and obstacles, and
 the nearest hit wins. The layout is data, not code: both the Java robot and sim
 server load it at startup. The visualiser does not read the manifest — it draws
@@ -267,7 +277,8 @@ heading.
     { "id": "left-wheel",   "type": "wheel",           "angle":  1.5707963267948966, "offset": 0.25 },
     { "id": "right-wheel",  "type": "wheel",           "angle": -1.5707963267948966, "offset": 0.25 },
     { "id": "front-sensor", "type": "proximitySensor", "angle":  0.0 },
-    { "id": "right-sensor", "type": "proximitySensor", "angle": -1.5707963267948966 }
+    { "id": "right-sensor", "type": "proximitySensor", "angle": -1.5707963267948966 },
+    { "id": "front-light",  "type": "tool",            "angle":  0.0 }
   ]
 }
 ```
@@ -275,6 +286,8 @@ heading.
 - `schemaVersion` must be `2`; a `side` field is rejected and wheel roles are
   **derived** from angle instead: `sin(angle) > 0.9` → left, `sin(angle) < -0.9`
   → right (exactly one of each required; other angles rejected).
+- A `tool` declares a finite `angle` and no `offset`; it affects no geometry,
+  collision or kinematics.
 - Track width is derived from the manifest as `y_left - y_right` =
   `offset_left·sin(angle_left) − offset_right·sin(angle_right)` (`0.5` for the
   default manifest). The sim uses this in place of the default world config's
@@ -312,6 +325,10 @@ interface ProximitySensor extends Component {
     long latestSimTick();         // tick of the most recent reading
     double distance();            // Infinity if nothing detected
 }
+interface Tool extends Component {
+    void activate(); void deactivate();
+    Tool NOOP = ...;              // used when no tool is declared
+}
 interface RobotBehaviour { void init(); void update(); }   // student implements (~20 Hz)
 interface Mover {                 // high-level, wheel-agnostic movement
     void forward(); void backward(); void turnRight(); void turnLeft(); void stop();
@@ -320,7 +337,8 @@ interface Brain {                 // student writes DI/wiring implementation
     Mover mover();
     ProximitySensor frontSensor();  // fixed id "front-sensor" (D-3)
     ProximitySensor rightSensor();  // fixed id "right-sensor" (D-3)
-    void setBehaviour(RobotBehaviour behaviour); // null stops motion
+    Tool tool();                  // single manifest tool or Tool.NOOP (by type)
+    void setBehaviour(RobotBehaviour behaviour); // null stops motion, deactivates tool
     void tick();                  // delegates to current behaviour.update()
 }
 ```
@@ -329,18 +347,20 @@ Example implementations (reference, not student code) live in `oobot.robot.examp
 (`WheeledMover` is the reference Mover; `DefaultBrain` is the reference Brain;
 `WallFollowRightBehaviour` is the default behaviour selected by `--behaviour`
 and `npm run dev`). `BrownianMotionBehaviour` lives in the student package and
-is opt-in (`--behaviour brownian`).
+is opt-in (`--behaviour brownian`). The default wall-follow behaviour also
+drives the front light: ON in `APPROACH`, `DRIVE` and `TURN_RIGHT_AT_END`; OFF in
+`SEARCH`, `AVOID`, `RECOVER_BACKUP`, `RECOVER_TURN` and `init()`.
 `WheeledMover` takes the full wheel list (`WheeledMover(List<Wheel>)`) and derives
 left/right roles from each wheel's `angle()`; `RobotController` supplies that
 list via `ComponentRegistry.wheels()`, which returns the bound `Wheel` handles
 sorted by ascending mount angle.
 The platform abstraction is `oobot.robot.bridge.RobotPlatform`; its sim
 implementation (`oobot.robot.bridge.sim.SimRobot`) hides WebSocket, NDJSON
-framing, reconnection, batched commands (one `componentCommand` per tick),
-two-layer safe stop, and concurrency.
+framing, reconnection, batched wheel/tool commands (one `componentCommand` per
+tick), two-layer safe stop, tool-state resync after reconnect, and concurrency.
 
 To add a new behaviour: create a class implementing `RobotBehaviour`, use the
-`Mover` and sensors exposed by your `Brain`, and register everything in
+`Mover`, sensors and tool exposed by your `Brain`, and register everything in
 `oobot.robot.RobotController` (`VALID_BEHAVIOURS` and `createBehaviour`).
 Rebuild the JAR with `npm run build:robot`.
 
@@ -352,9 +372,10 @@ Rebuild the JAR with `npm run build:robot`.
   JDK 21+. Fat JAR built with `./gradlew fatJar`.
 - Simulation owns world state; robot code only commands hardware via the framework.
 - Rendering never drives or blocks simulation timing. Sim runs on its own fixed ~60 Hz timestep.
-- Axis-aligned box obstacles, two id-addressed proximity sensors and six
-  behaviours are implemented. Defer: complex obstacle shapes, heartbeat,
-  multiple robots, genuinely generic `Brain` sensor lookup.
+- Axis-aligned box obstacles, two id-addressed proximity sensors, one
+  id-addressed tool (`front-light`) and six behaviours are implemented. Defer:
+  complex obstacle shapes, heartbeat, multiple robots, genuinely generic
+  `Brain` sensor/tool lookup.
 - Tests exist in all three packages: `simulator/server/test/**` and
   `simulator/visualiser/test/**` (node:test), `robot-framework/src/test/**`
   (JUnit 5 + byte-identical manifest fixtures). Run them before changing code.
@@ -376,10 +397,11 @@ is `docs/DOC_AUDIT.md`. `docs/archive/` holds superseded iteration-1 plans.
 | Add a sim→visualiser message type | `simulator/server/src/transport.ts`, `types.ts`, `sim.ts` + `specs/WIRE_PROTOCOL.md` |
 | Change robot→sim command handling / stale-command rules | `simulator/server/src/sim.ts`, `transport.ts`, `types.ts` |
 | Add a robot behaviour | New `*.java` implementing `RobotBehaviour` in `robot-framework/src/main/java/oobot/robot/student/` (or `example/`), register in `RobotController.createBehaviour` + `VALID_BEHAVIOURS`, then `npm run build:robot` |
-| Change the Java hardware API | `oobot/robot/student/{RobotBehaviour,Mover,Component,Wheel,ProximitySensor,Brain}.java` + `oobot/robot/description/` |
+| Change the Java hardware API | `oobot/robot/student/{RobotBehaviour,Mover,Component,Wheel,ProximitySensor,Tool,Brain}.java` + `oobot/robot/description/` |
 | Change the robot component layout / body geometry | `robots/default.json`, `oobot/robot/description/{RobotDescription,RobotBody,WheelGeometry}.java`, `simulator/server/src/robotDescription.ts`, `geometry.ts` + both fixture directories + `specs/ROBOT_DESCRIPTION.md` |
 | Change world file / spawn validation | `simulator/server/src/world.ts`, `geometry.ts`, `worlds/maze.json` + `specs/WORLD_FORMAT.md` |
 | Change the `worldSnapshot` robot shape | `simulator/server/src/{geometry,types,sim}.ts`, `simulator/visualiser/src/{types,renderer,main,liveStream}.ts` + `specs/WIRE_PROTOCOL.md` §6.2 |
+| Change tool state on the wire / in the visualiser | `simulator/server/src/{types,sim}.ts`, `simulator/visualiser/src/{types,liveStream,renderer}.ts` + `specs/WIRE_PROTOCOL.md` §6.2 |
 | Change visualiser rendering | `simulator/visualiser/src/renderer.ts`, `main.ts` |
 | Change visualiser WS client / reconnect reset | `simulator/visualiser/src/liveStream.ts` |
 | One-command dev startup | `scripts/dev.js`, `scripts/runRobot.js` + root `package.json` |
@@ -390,5 +412,6 @@ is `docs/DOC_AUDIT.md`. `docs/archive/` holds superseded iteration-1 plans.
 - Don't reintroduce hand-rolled JSON/WebSocket code — use Jackson/OkHttp (see `robot-framework/MODERNISATION.md`).
 - Don't make robot code depend on the sim's implementation language — the framework boundary is intentional.
 - Don't describe `motorCommand` / `sensorSnapshot` or static `Sensors` as current; they were replaced by id-addressed `componentCommand` / `componentSnapshot` and `ProximitySensor`.
+- Don't describe tool commands as a new message type — wheel and tool values share `componentCommand`, and the final safe-stop frame stays wheels-only.
 - Don't touch `next.md` (user's personal notes; ground rule 7 of `HARDENING_PLAN.md`).
 - Don't commit `node_modules/`, `dist/`, `dist-test/`, `build/`, `*.jar`, `.idea/`, `.vscode/` (covered by `.gitignore`); lockfiles *are* committed.

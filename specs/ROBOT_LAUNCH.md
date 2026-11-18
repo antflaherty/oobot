@@ -56,28 +56,34 @@ the process exits with code **2** — no stack trace and no half-started robot.
 4. The manifest must declare `proximitySensor` components with ids
    `front-sensor` and `right-sensor` (D-3). A missing id produces an error
    naming the id, the accessor that needs it and the manifest path.
+5. The bound tool components are resolved by type for `Brain.tool()`: zero
+   tools injects `Tool.NOOP`, exactly one injects that handle, and more than one
+   is a usage error naming the manifest and the tool count.
 
 ## Behaviour
 
 On a valid launch the controller:
 
 1. Loads the manifest and creates `SimRobot(host, port, description)`, which
-   binds `SimWheel` / `SimProximitySensor` handles by id into a
+   binds `SimWheel` / `SimProximitySensor` / `SimTool` handles by id into a
    `ComponentRegistry` and starts its reconnect thread.
 2. Builds `WheeledMover` from `ComponentRegistry.wheels()` (sorted by mount
    angle; left/right derived from `sin(angle)`), resolves the two fixed-id
-   sensors, creates the selected behaviour and wraps them in `DefaultBrain`.
+   sensors and the single tool (`Tool.NOOP` when none is declared), creates the
+   selected behaviour and wraps them in `DefaultBrain`.
 3. Registers a JVM shutdown hook that calls `platform.stop()`, then starts a
    `BehaviourLoop` that calls `Brain.tick()` every 50 ms (~20 Hz). Each tick is
    followed by `SimRobot.flushCommands()`.
 4. Connects with OkHttp via `WsConnection` to `ws://<host>:<port>`. Inbound
    NDJSON is buffered across frames; malformed lines are ignored; inbound
    `componentCommand` messages are explicitly discarded. On each open the seq
-   counter restarts at 0 and sensor state is invalidated.
-5. Batches all wheel values changed during a tick into **one**
-   `componentCommand` frame with the last seen `simTick` (J2.1). The sim gates
-   these frames by channel/connection, `seq` and `simTick` freshness (D-4,
-   `WIRE_PROTOCOL.md` §5.1).
+   counter restarts at 0 and sensor state is invalidated; after a reconnect the
+   persistent tool state is force-resynced on the next flush.
+5. Batches all wheel and tool values changed during a tick into **one**
+   `componentCommand` frame with the last seen `simTick` (J2.1); tool `value`
+   is exactly `1.0` (active) or `0.0` (inactive) alongside the wheel entries.
+   The sim gates these frames by channel/connection, `seq` and `simTick`
+   freshness (D-4, `WIRE_PROTOCOL.md` §5.1) and ignores non-`0`/`1` tool values.
 6. Updates sensor handles from `componentSnapshot.readings`; a tick rollback
    starts a fresh session with `distance() == Infinity` and `latestSimTick() == 0`.
 7. Reconnects after ~2 s when the socket closes, unless stopped.
@@ -87,15 +93,17 @@ On a valid launch the controller:
 On every orderly disconnect, shutdown or reconnect the bridge:
 
 1. stops the behaviour tick;
-2. writes one `componentCommand` containing **every** bound wheel id with
-   `value: 0.0`, using the next unused seq and the last seen `simTick`;
+2. writes one **wheels-only** `componentCommand` containing **every** bound
+   wheel id with `value: 0.0`, using the next unused seq and the last seen
+   `simTick`; tools keep their local state and are not in this frame;
 3. writes/flushes it while `WsConnection.isOpen()` is still true
    (`closeWithFinalFrame`), then clears `open` and calls `close()`;
-4. only then schedules any reconnect.
+4. only then schedules any reconnect; the next open force-resyncs tool state.
 
 If the socket is already dead this is best-effort. Independently, the sim zeros
-its actuators when the active robot socket closes and on shutdown (layer A).
-There is no heartbeat/timeout for hung-but-connected processes.
+its actuators and clears all tool states when the active robot socket closes and
+on shutdown (layer A). There is no heartbeat/timeout for hung-but-connected
+processes.
 
 ## Out of scope
 

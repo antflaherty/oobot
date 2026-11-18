@@ -25,10 +25,12 @@ import oobot.robot.student.BrownianMotionBehaviour;
 import oobot.robot.student.Mover;
 import oobot.robot.student.ProximitySensor;
 import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Tool;
 
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -108,10 +110,11 @@ public class RobotController implements Runnable {
         Mover mover = new WheeledMover(reg.wheels());
         ProximitySensor front = reg.sensor(FRONT_SENSOR_ID);
         ProximitySensor right = reg.sensor(RIGHT_SENSOR_ID);
+        Tool tool = requireSingleTool(reg, manifest);
 
-        RobotBehaviour behaviour = createBehaviour(behaviourName, mover, front, right);
+        RobotBehaviour behaviour = createBehaviour(behaviourName, mover, front, right, tool);
 
-        Brain brain = new DefaultBrain(mover, front, right);
+        Brain brain = new DefaultBrain(mover, front, right, tool);
         brain.setBehaviour(behaviour);
 
         Runtime.getRuntime().addShutdownHook(new Thread(platform::stop, "robot-shutdown"));
@@ -177,6 +180,20 @@ public class RobotController implements Runnable {
         }
     }
 
+    /**
+     * Discover tools by manifest TYPE (never by a hardcoded id). The student
+     * {@link Brain#tool()} accessor can drive only one tool; zero tools is fine
+     * and injects {@link Tool#NOOP}.
+     */
+    private Tool requireSingleTool(ComponentRegistry registry, Path manifest) {
+        List<Tool> tools = registry.tools();
+        if (tools.size() > 1) {
+            throw failure("Manifest " + manifest + " declares " + tools.size()
+                    + " tools, but Brain.tool() supports exactly one tool.");
+        }
+        return tools.isEmpty() ? Tool.NOOP : tools.get(0);
+    }
+
     private CommandLine.ParameterException failure(String message) {
         return new CommandLine.ParameterException(spec.commandLine(), message);
     }
@@ -206,11 +223,12 @@ public class RobotController implements Runnable {
     }
 
     private RobotBehaviour createBehaviour(String name, Mover mover,
-                                           ProximitySensor front, ProximitySensor right) {
+                                           ProximitySensor front, ProximitySensor right,
+                                           Tool tool) {
         return switch (name) {
             case "square" -> new SquareTraceBehaviour(mover, front, right);
             case "wall-avoid" -> new WallAvoidBehaviour(mover, front, right);
-            case "wall-follow-right" -> new WallFollowRightBehaviour(mover, front, right);
+            case "wall-follow-right" -> new WallFollowRightBehaviour(mover, front, right, tool);
             case "circle" -> new CircleTraceBehaviour(mover, front, right);
             case "heart" -> new HeartTraceBehaviour(mover, front, right);
             case "brownian" -> new BrownianMotionBehaviour(mover, front, right);

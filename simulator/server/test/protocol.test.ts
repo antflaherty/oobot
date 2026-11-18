@@ -31,6 +31,7 @@ const DESCRIPTION: RobotDescription = {
     { id: "left-wheel", type: "wheel", angle: Math.PI / 2, offset: 0.25 },
     { id: "right-wheel", type: "wheel", angle: -Math.PI / 2, offset: 0.25 },
     { id: "front-sensor", type: "proximitySensor", angle: 0, offset: 0 },
+    { id: "front-light", type: "tool", angle: 0, offset: 0 },
   ],
 };
 
@@ -117,6 +118,10 @@ function componentCommand(
   return { type: "componentCommand", seq, simTick, payload: { commands } };
 }
 
+function toolCommand(seq: number, simTick: number | undefined, value: number): IncomingEnvelope {
+  return componentCommand(seq, simTick, [{ id: "front-light", value }]);
+}
+
 // ---- Acceptance criterion: visualiser commands are ignored and logged -----
 
 test("componentCommand from a visualiser connection is ignored and logged", () => {
@@ -133,7 +138,10 @@ test("componentCommand from a visualiser connection is ignored and logged", () =
   try {
     transport.message(
       viz,
-      componentCommand(0, 5, [{ id: "left-wheel", value: 1 }]),
+      componentCommand(0, 5, [
+        { id: "left-wheel", value: 1 },
+        { id: "front-light", value: 1 },
+      ]),
       "visualiser",
     );
   } finally {
@@ -141,6 +149,7 @@ test("componentCommand from a visualiser connection is ignored and logged", () =
   }
 
   assert.deepEqual(engine.getState().command, { left: 0, right: 0 });
+  assert.deepEqual(engine.getState().toolStates, { "front-light": false });
   assert.ok(
     logs.some(
       (line) =>
@@ -247,6 +256,124 @@ test("D-4: duplicate, out-of-order, stale and invalid commands are ignored", () 
   assert.equal(engine.getState().command.left, 1);
 });
 
+// ---- Tool component commands ---------------------------------------------
+
+test("tool commands activate and deactivate; non-strict values are ignored", () => {
+  const transport = new FakeTransport();
+  const engine = startedEngine(transport);
+  const robot = transport.connect("robot");
+
+  assert.deepEqual(engine.getState().toolStates, { "front-light": false });
+
+  transport.message(robot, toolCommand(0, 5, 1));
+  assert.deepEqual(engine.getState().toolStates, { "front-light": true });
+
+  transport.message(robot, toolCommand(1, 6, 0));
+  assert.deepEqual(engine.getState().toolStates, { "front-light": false });
+
+  const ignoredBefore = engine.getState().counters.commandsIgnored;
+  for (const [seq, value] of [[2, 0.5], [3, -1], [4, 2]] as const) {
+    transport.message(robot, toolCommand(seq, 6 + seq, value));
+    assert.deepEqual(
+      engine.getState().toolStates,
+      { "front-light": false },
+      `value ${value} must not change tool state`,
+    );
+  }
+  assert.equal(
+    engine.getState().counters.commandsIgnored,
+    ignoredBefore + 3,
+    "each invalid tool value must be counted as ignored",
+  );
+});
+
+test("tool commands coexist with wheel commands and wheel clamping", () => {
+  const transport = new FakeTransport();
+  const engine = startedEngine(transport);
+  const robot = transport.connect("robot");
+
+  transport.message(
+    robot,
+    componentCommand(0, 5, [
+      { id: "left-wheel", value: 2 }, // clamped to 1 as before
+      { id: "front-light", value: 1 },
+    ]),
+  );
+  assert.equal(engine.getState().command.left, 1);
+  assert.equal(engine.getState().counters.commandsClamped, 1);
+  assert.deepEqual(engine.getState().toolStates, { "front-light": true });
+
+  transport.message(
+    robot,
+    componentCommand(1, 6, [
+      { id: "right-wheel", value: -0.5 },
+      { id: "front-light", value: 0 },
+    ]),
+  );
+  assert.equal(engine.getState().command.right, -0.5);
+  assert.deepEqual(engine.getState().toolStates, { "front-light": false });
+});
+
+test("tool state clears on active robot disconnect, not on a stale disconnect", () => {
+  const transport = new FakeTransport();
+  const engine = startedEngine(transport);
+  const robotA = transport.connect("robot");
+  transport.message(robotA, toolCommand(0, 5, 1));
+  assert.deepEqual(engine.getState().toolStates, { "front-light": true });
+
+  const robotB = transport.connect("robot");
+  transport.message(robotB, toolCommand(0, 6, 1));
+  transport.disconnect(robotA); // stale — must not clear the active robot's tool state
+  assert.deepEqual(engine.getState().toolStates, { "front-light": true });
+
+  transport.disconnect(robotB); // active — tool safe stop
+  assert.deepEqual(engine.getState().toolStates, { "front-light": false });
+});
+
+test("stop() clears all tool states", () => {
+  const transport = new FakeTransport();
+  const engine = new SimEngine(transport, DESCRIPTION);
+  engine.start();
+  try {
+    const robot = transport.connect("robot");
+    transport.message(robot, toolCommand(0, 5, 1));
+    assert.deepEqual(engine.getState().toolStates, { "front-light": true });
+
+    engine.stop();
+    assert.deepEqual(engine.getState().toolStates, { "front-light": false });
+  } finally {
+    engine.stop();
+  }
+});
+
+test("D-4: duplicate, stale and invalid tool commands are ignored", () => {
+  const transport = new FakeTransport();
+  const engine = startedEngine(transport);
+  const robot = transport.connect("robot");
+
+  transport.message(robot, toolCommand(1, 5, 1));
+  assert.deepEqual(engine.getState().toolStates, { "front-light": true });
+
+  transport.message(robot, toolCommand(1, 6, 0)); // duplicate seq
+  transport.message(robot, toolCommand(0, 7, 0)); // out-of-order seq
+  transport.message(robot, toolCommand(2, 3, 0)); // stale simTick
+  transport.message(robot, {
+    type: "componentCommand",
+    seq: Number.NaN,
+    simTick: 8,
+    payload: { commands: [{ id: "front-light", value: 0 }] },
+  });
+  transport.message(robot, toolCommand(3, undefined, 0)); // missing simTick
+  assert.deepEqual(
+    engine.getState().toolStates,
+    { "front-light": true },
+    "rejected commands must not change tool state",
+  );
+
+  transport.message(robot, toolCommand(4, 4, 0)); // exactly one tick older is accepted
+  assert.deepEqual(engine.getState().toolStates, { "front-light": false });
+});
+
 // ---- worldSnapshot advertises the collision footprint --------------------
 
 test("worldSnapshot payload.robot includes the manifest-derived shape", async () => {
@@ -272,6 +399,35 @@ test("worldSnapshot payload.robot includes the manifest-derived shape", async ()
         { angle: -Math.PI / 2, offset: 25, length: 30, width: 10 },
       ],
     });
+  } finally {
+    engine.stop();
+  }
+});
+
+test("worldSnapshot robot.toolStates reflects authoritative tool state", async () => {
+  const transport = new FakeTransport();
+  const engine = new SimEngine(transport, DESCRIPTION);
+  engine.start();
+  try {
+    const robot = transport.connect("robot");
+    transport.connect("visualiser");
+    transport.message(robot, toolCommand(0, 5, 1));
+
+    const latestPayload = (): WorldSnapshotPayload | undefined => {
+      const snapshots = transport.sent.filter(
+        (entry) => entry.envelope.type === "worldSnapshot",
+      );
+      return snapshots.length > 0
+        ? (snapshots[snapshots.length - 1].envelope.payload as WorldSnapshotPayload)
+        : undefined;
+    };
+
+    await waitFor(() => latestPayload()?.robot.toolStates?.[0]?.active === true);
+    assert.deepEqual(latestPayload()?.robot.toolStates, [{ id: "front-light", active: true }]);
+
+    transport.message(robot, toolCommand(1, 6, 0));
+    await waitFor(() => latestPayload()?.robot.toolStates?.[0]?.active === false);
+    assert.deepEqual(latestPayload()?.robot.toolStates, [{ id: "front-light", active: false }]);
   } finally {
     engine.stop();
   }

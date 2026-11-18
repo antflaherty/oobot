@@ -58,8 +58,12 @@ export interface Obstacle {
   height: number; // full height, world units
 }
 
+export interface ToolState { id: string; active: boolean }
+
 export interface WorldSnapshotPayload {
-  robot: { x: number; y: number; heading: number; shape?: RobotShape }; // heading: radians, 0 = +X axis
+  // toolStates is authoritative sim state, one entry per declared tool in
+  // manifest order; optional so older snapshots remain valid.
+  robot: { x: number; y: number; heading: number; shape?: RobotShape; toolStates?: ToolState[] }; // heading: radians, 0 = +X axis
   obstacles: Obstacle[]; // static obstacles (iteration 2)
 }
 

@@ -18,9 +18,11 @@ Java robot framework and example behaviours.
 The simulation engine (`simulator/server/src/`) is the authoritative owner of
 world state. It:
 
-- maintains the world, robot pose, component command state and sensor readings;
+- maintains the world, robot pose, wheel and tool command state and sensor
+  readings;
 - advances a fixed ~60 Hz timestep independently of rendering;
-- applies wheel commands through differential-drive kinematics;
+- applies wheel commands through differential-drive kinematics; tools carry an
+  active flag only, with no geometry or kinematic effect;
 - detects collisions with the box edges and static obstacles;
 - casts sensor rays against box edges and obstacles;
 - publishes `componentSnapshot` to the robot and `worldSnapshot` to all
@@ -72,8 +74,8 @@ pose, command and counters for tests and tooling.
 
 Each controller runs as a separate Java process. It executes one
 `RobotBehaviour` via a `Brain` at ~20 Hz, reads the latest `ProximitySensor`
-values and issues high-level `Mover` actions. It never mutates world state and
-never sees sockets, NDJSON or motor power values.
+values, issues high-level `Mover` actions and drives its single `Tool`. It never
+mutates world state and never sees sockets, NDJSON or motor power values.
 
 The controller is launched with picocli CLI options:
 
@@ -89,8 +91,9 @@ an absolute path instead.
 `--help` and `--version` are also available. The default behaviour is
 `wall-follow-right`. `--robot` defaults to `../robots/default.json` resolved
 against the framework directory (the JAR's parent). Missing manifests, invalid
-manifests, unknown behaviours and missing required sensor ids are reported as
-usage errors with exit code 2, before any connection is opened.
+manifests, unknown behaviours, missing required sensor ids and manifests
+declaring more than one tool are reported as usage errors with exit code 2,
+before any connection is opened.
 
 ### Java robot framework
 
@@ -103,17 +106,21 @@ The student-facing API lives in `oobot.robot.student`:
   detected) and `latestSimTick()` (tick of the last reading; `0` after a fresh
   session). The documented max-staleness policy is 30 sim ticks (~0.5 s at 60
   Hz).
+- `Tool` — `activate()` / `deactivate()` and `Tool.NOOP`; the single manifest
+  tool is injected, or the no-op handle when none is declared.
 - `Mover` — high-level `forward()`, `backward()`, `turnLeft()`, `turnRight()`,
   `stop()`; `WheeledMover` derives left/right wheel roles from `sin(angle)`
   (`> 0.9` left, `< -0.9` right).
-- `Brain` — dependency injection for a `Mover` and the two sensors, plus
-  `setBehaviour(...)` and `tick()`. Setting a null behaviour stops the robot.
+- `Brain` — dependency injection for a `Mover`, the two sensors and the single
+  `Tool`, plus `setBehaviour(...)` and `tick()`. Setting a null behaviour stops
+  the robot and deactivates the tool.
 - `RobotBehaviour` — `init()` and `update()`, called by the framework loop.
 
 The framework owns the concrete implementations. `RobotDescription` /
 `ComponentRegistry` load and validate the v2 manifest; `SimRobot` implements the
-`RobotPlatform` lifecycle (connect, reconnect, batch commands, safe stop).
-Wheel changes are buffered locally and flushed by the behaviour loop as **one**
+`RobotPlatform` lifecycle (connect, reconnect, batch commands, safe stop) and
+binds `SimWheel`, `SimProximitySensor` and `SimTool` handles. Wheel and tool
+changes are buffered locally and flushed by the behaviour loop as **one**
 `componentCommand` frame per tick. The OkHttp WebSocket client, Jackson JSON,
 SLF4J/Logback logging and the Gradle fat JAR are framework details, not student
 API.
@@ -121,22 +128,27 @@ API.
 `Brain` is intentionally fixed-id (D-3): `frontSensor()` must resolve
 `front-sensor` and `rightSensor()` must resolve `right-sensor`. The wire model
 remains id-addressed, but a manifest missing either id is rejected at startup.
+`tool()` is type-based instead: the one declared tool is injected, `Tool.NOOP`
+is injected when none is declared, and more than one tool is a startup error.
 
 Example implementations live in `oobot.robot.example` (five behaviours plus
 `WheeledMover` and `DefaultBrain`); the random-walk behaviour lives in
-`oobot.robot.student`.
+`oobot.robot.student`. The default wall-follow behaviour drives the front light
+ON in `APPROACH`, `DRIVE` and `TURN_RIGHT_AT_END`, and OFF in `SEARCH`, `AVOID`,
+`RECOVER_BACKUP`, `RECOVER_TURN` and on `init()`.
 
 ### Visualiser
 
 The visualiser (`simulator/visualiser/`) connects to the visualiser channel and
-renders `worldSnapshot` messages: robot pose, heading and the obstacle list.
+renders `worldSnapshot` messages: robot pose, heading, the obstacle list and
+tool states (a front circle in red when active, darker blue when inactive).
 It holds the last snapshot and interpolates toward the next available one on
 each animation frame; when no newer snapshot exists it holds the last pose
 (no extrapolation). With no live sim data the canvas is empty and a "no
-connection" message is displayed. The trail is cleared on every (re)connect;
-snapshots, interpolation clock and obstacles are also reset when a
-sim tick rolls back, so a restarted sim cannot freeze or duplicate rendering
-(D-5). The visualiser never sends messages to the sim.
+connection" message is displayed. The snapshot buffer, interpolation clock,
+obstacles and cached tool states are reset on every (re)connect and when a sim
+tick rolls back (D-5); the trail is cleared on every (re)connect. The visualiser
+never sends messages to the sim.
 
 ## Communication boundaries
 
@@ -169,25 +181,29 @@ All messages are newline-delimited JSON with the envelope:
 - `simTick` is the logical clock and the source of truth for staleness;
   wall-clock timestamps are never used to judge freshness.
 - `payload` is message-specific:
-  - `componentCommand`: `commands: [{ id, value }]`, value in `[-1, 1]`;
+  - `componentCommand`: `commands: [{ id, value }]`, value in `[-1, 1]` for
+    wheels and exactly `0` or `1` for tools;
   - `componentSnapshot`: `readings: [{ id, value | null }]`, one per declared
     proximity sensor, in world units;
-  - `worldSnapshot`: `robot: { x, y, heading }` plus `obstacles: [...]`.
+  - `worldSnapshot`: `robot: { x, y, heading }` (optionally `shape` and
+    `toolStates: [{ id, active }]`) plus `obstacles: [...]`.
 
 ### Command integrity and safe stop
 
 A `componentCommand` is accepted only from the active robot connection, with
 finite non-negative integer `seq` and `simTick`, `seq` greater than the last
 accepted value and `simTick` no more than one tick behind the last seen value
-(D-4). Rejected commands are logged and ignored before touching actuator state;
-per-connection tracking resets when the active robot slot changes.
+(D-4). Rejected commands are logged and ignored before touching wheel or tool
+state; per-connection tracking resets when the active robot slot changes.
 
-Actuator state is persistent: wheels keep their last commanded level until a
-new command arrives. Safe stop has two independent layers (D-2): the sim zeroes
-its command state when the active robot socket closes or on sim shutdown, and
-the Java bridge writes one zero command for every bound wheel id before closing
-or reconnecting its socket. Sensor readings are invalidated on disconnect,
-reconnect and tick rollback.
+Actuator state is persistent: wheels keep their last commanded level and tools
+their active/inactive state until a new command arrives; tool values accept
+only exactly `0`/`1` under the D-4 checks above. Safe stop has two independent
+layers (D-2): the sim zeroes wheels and clears all tool states when the active
+robot socket closes or on sim shutdown, and the Java bridge writes one
+wheels-only zero command for every bound wheel id before closing or reconnecting
+its socket, then force-resyncs tool state on the new connection. Sensor readings
+are invalidated on disconnect, reconnect and tick rollback.
 
 Inbound NDJSON lines are buffered across frames, capped in length (oversized
 peers are dropped) and malformed lines are logged. Outbound sends are
@@ -202,9 +218,9 @@ bounded so an unresponsive client cannot stall exit.
 
 The loops are independently scheduled and coordinate only through snapshots and
 persistent actuator state. If a controller disconnects the sim safe-stops; the
-controller reconnects after a fixed delay, resets `seq` and sensor state and
-resumes. A heartbeat/timeout for a hung-but-connected process remains deferred
-beyond this scope.
+controller reconnects after a fixed delay, resets `seq` and sensor state,
+resyncs tool state and resumes. A heartbeat/timeout for a hung-but-connected
+process remains deferred beyond this scope.
 
 ## Technology choices
 

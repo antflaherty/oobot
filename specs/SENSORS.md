@@ -29,7 +29,7 @@ Defines the implemented sensing path:
 | Fixed Java accessors (D-3) | `Brain.frontSensor()` → id `front-sensor`, `Brain.rightSensor()` → id `right-sensor`; validated at startup. Other sensors may be declared but are not addressable through `Brain`. |
 | Single-slot delivery | Latest values overwrite the previous ones each tick; no queue, no polling (`WIRE_PROTOCOL.md` §8). |
 | Freshness by `simTick` | `simTick` on each snapshot, never wall-clock (`WIRE_PROTOCOL.md` §5). |
-| Mount geometry | `angle` in radians relative to heading: 0 = forward, + = CCW, right = -π/2; rays originate at the robot centre (`ROBOT_DESCRIPTION.md`). The physical body/wheel footprint affects collision, not sensing. |
+| Mount geometry | `angle` in radians relative to heading: 0 = forward, + = CCW, right = -π/2; rays originate at the robot centre (`ROBOT_DESCRIPTION.md`). The physical body/wheel footprint affects collision, not sensing. Tools declare `angle` but no `offset` and have no geometry or sensing effect. |
 | Obstacles + box edges | Rays hit static axis-aligned obstacles from the world file and the world box edges; nearest hit wins (`WORLD_FORMAT.md`). |
 | Session reset | Java invalidates readings on disconnect, reconnect and tick rollback; visualiser resets its own state (D-5). |
 
@@ -99,8 +99,10 @@ unchanged.
 ### 4.1 What does NOT change
 
 - Envelope `{ type, seq, simTick, payload }` and NDJSON framing.
-- `componentCommand` payload `{ commands: [{ id, value }] }` for wheels.
-- `worldSnapshot` carries the robot pose and obstacles, never sensor readings.
+- `componentCommand` payload `{ commands: [{ id, value }] }` for wheels and tools
+  (tool values exactly `0`/`1`; see `WIRE_PROTOCOL.md` §6.1).
+- `worldSnapshot` carries the robot pose, optional shape and tool states, never
+  sensor readings.
 - The visualiser channel remains unidirectional.
 
 ---
@@ -163,8 +165,8 @@ infinity.
 ## 7. Visualiser
 
 Sensor rays, hit points and distances are **not** rendered. The visualiser
-receives only `worldSnapshot` (robot pose + obstacles); readings stay on the
-robot channel.
+receives only `worldSnapshot` (robot pose, optional shape and tool states);
+readings stay on the robot channel.
 
 ---
 

@@ -7,7 +7,7 @@ package oobot.robot.student;
  * <p>
  * This is a <b>student-facing interface</b>. Students write their own
  * {@code Brain} implementation to perform dependency injection: assemble a
- * {@link Mover}, named {@link ProximitySensor}s, and an initial
+ * {@link Mover}, named {@link ProximitySensor}s, a {@link Tool}, and an initial
  * {@link RobotBehaviour}, then hand the brain to the behaviour loop. The loop repeatedly calls
  * {@link #tick()}, which delegates to the current behaviour's
  * {@link RobotBehaviour#update()}.
@@ -24,6 +24,11 @@ package oobot.robot.student;
  * validates that both are declared as {@code proximitySensor} components at
  * startup and fails with usage output if either is missing. A manifest may
  * declare other sensors, but this API cannot address them.
+ * <p>
+ * <b>Tool (generic single reference).</b> {@link #tool()} does not use a fixed
+ * id: the controller injects the one {@code tool} declared in the manifest, or
+ * {@link Tool#NOOP} if there is none. A manifest declaring more than one tool is
+ * a startup error because this API can drive only one.
  */
 public interface Brain {
     /** High-level movement commands (forward, backward, turnLeft, turnRight, stop). */
@@ -36,11 +41,18 @@ public interface Brain {
     ProximitySensor rightSensor();
 
     /**
+     * The single manifest-declared tool, or {@link Tool#NOOP} if the manifest
+     * declares none. The controller performs this injection; it is not a
+     * fixed-id lookup.
+     */
+    Tool tool();
+
+    /**
      * Swap the active behaviour. Invokes {@link RobotBehaviour#init()} on the
      * new behaviour so it can reset its internal state.
      *
      * @param behaviour the new behaviour, or {@code null} to clear the current
-     *                  one and stop all motion
+     *                  one, stop all motion and deactivate the tool
      */
     void setBehaviour(RobotBehaviour behaviour);
 

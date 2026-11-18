@@ -18,6 +18,7 @@ import {
   ComponentCommandPayload,
   ComponentSnapshotPayload,
   OutgoingEnvelope,
+  ToolState,
 } from "./types";
 import {
   WorldConfig,
@@ -114,6 +115,10 @@ export class SimEngine {
   // detected along that sensor's declared ray.
   private latestReadings: ComponentReading[] = [];
 
+  // Authoritative tool state, keyed by component id. Initialised false for
+  // every declared tool; independent of wheel/motor safe-stop state.
+  private readonly toolStates = new Map<string, boolean>();
+
   private robotConnectionId: string | null = null;
 
   // D-4: sequence/freshness state for the currently active robot connection.
@@ -144,6 +149,9 @@ export class SimEngine {
   ) {
     this.transport = transport;
     this.registry = new ComponentRegistry(description);
+    for (const tool of this.registry.tools()) {
+      this.toolStates.set(tool.id, false);
+    }
     this.shape = toRobotShape(description.body, description.components);
     this.world = new WorldModel(
       { ...(worldConfig ?? DEFAULT_WORLD_CONFIG), trackWidth: this.registry.trackWidth() },
@@ -197,6 +205,7 @@ export class SimEngine {
             this.robotConnectionId = null;
             this.resetRobotCommandState();
             this.stopMotors(); // safe stop — motors cannot keep running
+            this.clearToolStates(); // tools must not stay on with no controller
           } else {
             log(`stale robot disconnect ignored (${connectionId})`);
           }
@@ -223,6 +232,7 @@ export class SimEngine {
       this.timer = null;
     }
     this.stopMotors();
+    this.clearToolStates();
     log("simulation stopped");
   }
 
@@ -294,6 +304,21 @@ export class SimEngine {
         log(`ignoring command for unknown component id "${command.id}" (tick ${this.simTick})`);
         continue;
       }
+      if (component.type === "tool") {
+        // Tool values are strict: exactly 0 = inactive, 1 = active. Anything
+        // else is ignored (never clamped) and reported as an ignored command.
+        if (command.value !== 0 && command.value !== 1) {
+          this.counters.commandsIgnored++;
+          log(
+            `ignoring tool command value ${command.value} for "${command.id}" ` +
+              `(tick ${this.simTick}) — expected 0 or 1`,
+          );
+          continue;
+        }
+        this.toolStates.set(component.id, command.value === 1);
+        continue;
+      }
+
       if (component.type !== "wheel") {
         this.counters.commandsIgnored++;
         log(`ignoring command for non-wheel component "${command.id}" (tick ${this.simTick})`);
@@ -323,6 +348,14 @@ export class SimEngine {
   private stopMotors(): void {
     this.latestCommand = { left: 0, right: 0 };
     log("safe stop: motors stopped");
+  }
+
+  // Tool safe stop: independent of the D-2 motor safe stop. Called on active
+  // robot disconnect and on sim shutdown so a tool cannot stay on unattended.
+  private clearToolStates(): void {
+    for (const tool of this.registry.tools()) {
+      this.toolStates.set(tool.id, false);
+    }
   }
 
   // Nearest hit along a given heading among world box edges and obstacles.
@@ -412,12 +445,18 @@ export class SimEngine {
 
     // 4. Publish worldSnapshot to the visualiser channel every tick.
     //    Drop-oldest backpressure per client; never block on a visualiser.
+    //    Tool states are authoritative sim state, one per declared tool in
+    //    manifest order, rebuilt from the map on every snapshot.
+    const toolStates: ToolState[] = this.registry.tools().map((tool) => ({
+      id: tool.id,
+      active: this.toolStates.get(tool.id) ?? false,
+    }));
     const worldEnvelope: OutgoingEnvelope = {
       type: "worldSnapshot",
       seq: 0, // assigned per-connection by the transport on send
       simTick: this.simTick,
       payload: {
-        robot: { ...this.world.pose, shape: this.shape },
+        robot: { ...this.world.pose, shape: this.shape, toolStates },
         obstacles: this.world.obstacles,
       },
     };
@@ -448,6 +487,7 @@ export class SimEngine {
       simTick: this.simTick,
       pose: { ...this.world.pose },
       command: { ...this.latestCommand },
+      toolStates: Object.fromEntries(this.toolStates),
       counters: { ...this.counters },
     };
   }

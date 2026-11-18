@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { LiveStream } from '../src/liveStream';
-import type { RobotShape } from '../src/types';
+import type { RobotShape, ToolState } from '../src/types';
 
 /** Minimal stand-in for the browser WebSocket, cast at the injection point. */
 class FakeWebSocket {
@@ -88,13 +88,22 @@ const TEST_SHAPE: RobotShape = {
   ],
 };
 
-function snapshotLine(tick: number, x: number, y: number, shape?: unknown): string {
+function snapshotLine(
+  tick: number,
+  x: number,
+  y: number,
+  shape?: unknown,
+  toolStates?: unknown,
+): string {
+  const robot: Record<string, unknown> = { x, y, heading: 0 };
+  if (shape !== undefined) robot.shape = shape;
+  if (toolStates !== undefined) robot.toolStates = toolStates;
   const msg = {
     type: 'worldSnapshot',
     seq: tick,
     simTick: tick,
     payload: {
-      robot: { x, y, heading: 0, ...(shape === undefined ? {} : { shape }) },
+      robot,
       obstacles: [{ x: 10, y: 20, width: 30, height: 40 }],
     },
   };
@@ -522,6 +531,139 @@ test('malformed shapes are treated as absent without dropping snapshots', () => 
   // A valid shape after the bad ones is still accepted.
   receiveShape(JSON.stringify(TEST_SHAPE), malformed.length + 1);
   assert.deepEqual(stream.getRobotShape(), TEST_SHAPE);
+
+  stream.stop();
+});
+
+test('getToolStates caches the latest tool states from snapshots', () => {
+  const { stream, sockets } = makeStream();
+  stream.start();
+  const ws = sockets[0];
+  assert.ok(ws);
+  ws.open();
+
+  assert.deepEqual(stream.getToolStates(), [], 'no tools before any snapshot');
+  assert.equal(stream.isToolActive('front-light'), false);
+
+  const on: ToolState[] = [{ id: 'front-light', active: true }];
+  ws.receive(snapshotLine(1, 0, 0, undefined, on));
+  assert.deepEqual(stream.getToolStates(), on);
+  assert.equal(stream.isToolActive('front-light'), true);
+  assert.equal(stream.isToolActive('other-tool'), false, 'unknown ids are inactive');
+
+  const latest: ToolState[] = [
+    { id: 'front-light', active: false },
+    { id: 'other-tool', active: true },
+  ];
+  ws.receive(snapshotLine(2, 0, 0, undefined, latest));
+  assert.deepEqual(stream.getToolStates(), latest, 'the newest snapshot must win');
+  assert.equal(stream.isToolActive('front-light'), false);
+  assert.equal(stream.isToolActive('other-tool'), true);
+
+  stream.stop();
+});
+
+test('malformed toolStates fields and entries are ignored without dropping snapshots', () => {
+  const { stream, sockets, setNow } = makeStream();
+  stream.start();
+  const ws = sockets[0];
+  assert.ok(ws);
+  ws.open();
+
+  // Parsing policy: skip bad entries individually; an absent or non-array
+  // field means no tools are lit. Valid entries are normalised to {id, active}.
+  const cases: Array<{ wire: unknown; expected: ToolState[] }> = [
+    { wire: null, expected: [] },
+    { wire: {}, expected: [] },
+    { wire: 'front-light', expected: [] },
+    { wire: 42, expected: [] },
+    { wire: [], expected: [] },
+    {
+      wire: [{ id: 'front-light', active: true }, null, [], 'nope', 7],
+      expected: [{ id: 'front-light', active: true }],
+    },
+    {
+      wire: [
+        { id: '', active: true },
+        { id: '   ', active: true },
+        { id: 5, active: true },
+        { id: 'front-light' },
+        { id: 'front-light', active: 'true' },
+        { id: 'front-light', active: 1 },
+      ],
+      expected: [],
+    },
+    {
+      wire: [{ id: 'ok-tool', active: false, extra: 'ignored' }],
+      expected: [{ id: 'ok-tool', active: false }],
+    },
+  ];
+
+  cases.forEach(({ wire, expected }, i) => {
+    const tick = i + 1;
+    ws.receive(snapshotLine(tick, 1, 2, undefined, wire));
+    assert.deepEqual(stream.getToolStates(), expected, `toolStates case ${i}`);
+    assert.equal(stream.getLatestTick(), tick, 'a bad field must not drop the snapshot');
+  });
+
+  setNow(100);
+  const pose = stream.getPoseAt(100);
+  assert.ok(pose);
+  assert.ok(
+    Number.isFinite(pose.pose.x) && Number.isFinite(pose.pose.y),
+    'bad tool data must not affect the pose',
+  );
+
+  // A valid field after the bad ones is still accepted.
+  ws.receive(
+    snapshotLine(cases.length + 1, 0, 0, undefined, [{ id: 'front-light', active: true }]),
+  );
+  assert.deepEqual(stream.getToolStates(), [{ id: 'front-light', active: true }]);
+  assert.equal(stream.isToolActive('front-light'), true);
+
+  stream.stop();
+});
+
+test('tool state cache clears on absent field, reset, reconnect and tick rollback', () => {
+  const { stream, sockets, setNow, fireTimers } = makeStream();
+  stream.start();
+  const ws1 = sockets[0];
+  assert.ok(ws1);
+  ws1.open();
+  const lit: ToolState[] = [{ id: 'front-light', active: true }];
+
+  ws1.receive(snapshotLine(1, 0, 0, undefined, lit));
+  assert.deepEqual(stream.getToolStates(), lit);
+  assert.equal(stream.isToolActive('front-light'), true);
+
+  ws1.receive(snapshotLine(2, 0, 0)); // no toolStates on this snapshot
+  assert.deepEqual(stream.getToolStates(), [], 'an absent field clears the cache');
+
+  ws1.receive(snapshotLine(3, 0, 0, undefined, lit));
+  stream.reset();
+  assert.deepEqual(stream.getToolStates(), [], 'reset() clears the cache');
+
+  ws1.receive(snapshotLine(4, 0, 0, undefined, lit));
+  ws1.close();
+  fireTimers();
+  const ws2 = sockets[1];
+  assert.ok(ws2);
+  ws2.open();
+  assert.deepEqual(stream.getToolStates(), [], 'reconnect clears the cache');
+
+  setNow(10);
+  ws2.receive(snapshotLine(100, 0, 0, undefined, lit));
+  setNow(20);
+  ws2.receive(snapshotLine(0, 0, 0)); // rollback + no tool states
+  assert.deepEqual(stream.getToolStates(), [], 'rollback clears the old session state');
+
+  // A rollback snapshot carrying tool states starts the new session with them.
+  setNow(30);
+  ws2.receive(snapshotLine(50, 0, 0, undefined, lit));
+  setNow(40);
+  ws2.receive(snapshotLine(0, 0, 0, undefined, [{ id: 'front-light', active: false }]));
+  assert.deepEqual(stream.getToolStates(), [{ id: 'front-light', active: false }]);
+  assert.equal(stream.isToolActive('front-light'), false);
 
   stream.stop();
 });

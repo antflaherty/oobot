@@ -14,6 +14,7 @@ import oobot.robot.description.RobotBody;
 import oobot.robot.description.RobotDescription;
 import oobot.robot.description.WheelGeometry;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /** Pure unit tests for the shared component manifest; no sim or sockets involved. */
 class RobotDescriptionTest {
@@ -45,11 +46,11 @@ class RobotDescriptionTest {
     }
 
     @Test
-    void loadsDefaultManifestWithFourComponents() {
+    void loadsDefaultManifestWithFiveComponentsIncludingTool() {
         RobotDescription description = RobotDescription.load(defaultManifest());
 
         List<ComponentDescription> components = description.components();
-        assertEquals(4, components.size());
+        assertEquals(5, components.size());
         assertTrue(components.stream().anyMatch(c ->
                 c.id().equals("left-wheel") && c.type() == ComponentType.WHEEL));
         assertTrue(components.stream().anyMatch(c ->
@@ -58,6 +59,44 @@ class RobotDescriptionTest {
                 c.id().equals("front-sensor") && c.type() == ComponentType.PROXIMITY_SENSOR));
         assertTrue(components.stream().anyMatch(c ->
                 c.id().equals("right-sensor") && c.type() == ComponentType.PROXIMITY_SENSOR));
+        ComponentDescription tool = components.stream()
+                .filter(c -> c.id().equals("front-light"))
+                .findFirst().orElseThrow();
+        assertEquals(ComponentType.TOOL, tool.type());
+        assertEquals(0.0, tool.angle(), 1e-9);
+        assertEquals(0.0, tool.offset(), 1e-9);
+    }
+
+    @Test
+    void toolMustNotDeclareOffset(@TempDir Path dir) throws Exception {
+        Path manifest = manifestWithToolReplacement(dir, "\"angle\": 0.0 }",
+                "\"angle\": 0.0, \"offset\": 0.25 }");
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class, () -> RobotDescription.load(manifest));
+        assertNotNull(error.getMessage());
+        assertTrue(error.getMessage().contains(manifest.toString()), error.getMessage());
+        assertTrue(error.getMessage().contains("component[4]"), error.getMessage());
+    }
+
+    @Test
+    void toolAngleMustBeFinite(@TempDir Path dir) throws Exception {
+        Path manifest = manifestWithToolReplacement(dir, "\"angle\": 0.0 }", "\"angle\": 1e999 }");
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class, () -> RobotDescription.load(manifest));
+        assertNotNull(error.getMessage());
+        assertTrue(error.getMessage().contains("component[4]"), error.getMessage());
+    }
+
+    @Test
+    void unknownComponentTypeIsStillRejected(@TempDir Path dir) throws Exception {
+        Path manifest = manifestWithToolReplacement(dir, "\"type\": \"tool\"", "\"type\": \"laser\"");
+
+        IllegalArgumentException error = assertThrows(
+                IllegalArgumentException.class, () -> RobotDescription.load(manifest));
+        assertNotNull(error.getMessage());
+        assertTrue(error.getMessage().contains("component[4]"), error.getMessage());
     }
 
     @Test
@@ -115,6 +154,19 @@ class RobotDescriptionTest {
                 file + ": error must name the manifest path; was: " + error.getMessage());
         assertTrue(error.getMessage().contains(token),
                 file + ": error must name " + token + "; was: " + error.getMessage());
+    }
+
+    /** Copy the updated default fixture, changing one token in the tool entry only. */
+    private static Path manifestWithToolReplacement(Path dir, String from, String to) throws Exception {
+        String content = Files.readString(fixture("valid-default.json"));
+        int toolIndex = content.indexOf("\"front-light\"");
+        assertTrue(toolIndex >= 0, "tool entry not found in fixture");
+        int at = content.indexOf(from, toolIndex);
+        assertTrue(at >= 0, "replacement target not found in tool entry: " + from);
+        Path manifest = dir.resolve("manifest.json");
+        Files.writeString(manifest,
+                content.substring(0, at) + to + content.substring(at + from.length()));
+        return manifest;
     }
 
     private static double derivedTrackWidth(RobotDescription description) {

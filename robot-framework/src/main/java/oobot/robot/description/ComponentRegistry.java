@@ -2,8 +2,10 @@ package oobot.robot.description;
 
 import oobot.robot.student.Component;
 import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Tool;
 import oobot.robot.student.Wheel;
 
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -71,6 +73,26 @@ public final class ComponentRegistry {
                 .map(Wheel.class::cast)
                 .sorted(Comparator.comparingDouble(Wheel::angle))
                 .toList();
+    }
+
+    /**
+     * All tools bound in this registry, in manifest declaration order. Unlike
+     * {@link #wheels()}, this follows the declared {@code TOOL} entries rather
+     * than a mount-angle sort, so callers see a stable, meaningful order.
+     */
+    public List<Tool> tools() {
+        List<Tool> tools = new ArrayList<>();
+        for (ComponentDescription component : description.components()) {
+            if (component.type() != ComponentType.TOOL) {
+                continue;
+            }
+            Component bound = components.get(component.id());
+            if (!(bound instanceof Tool tool)) {
+                throw new IllegalArgumentException("No Tool bound for id '" + component.id() + "'");
+            }
+            tools.add(tool);
+        }
+        return List.copyOf(tools);
     }
 
     private Component require(String id) {

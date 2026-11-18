@@ -122,12 +122,13 @@ public record RobotDescription(String name, RobotBody body, List<ComponentDescri
             }
 
             boolean hasOffset = node.has("offset");
-            // Sensors have no radial offset; only wheels default to one.
+            // Sensors and tools have no radial offset; only wheels default to one.
             double offset = 0.0;
-            if (type == ComponentType.PROXIMITY_SENSOR) {
+            if (type == ComponentType.PROXIMITY_SENSOR || type == ComponentType.TOOL) {
                 if (hasOffset) {
-                    throw componentProblem(path, i,
-                            "sensor '" + id + "' must not declare an offset");
+                    throw componentProblem(path, i, type == ComponentType.TOOL
+                            ? "tool '" + id + "' must not declare an offset"
+                            : "sensor '" + id + "' must not declare an offset");
                 }
             } else { // WHEEL
                 offset = DEFAULT_WHEEL_OFFSET;
@@ -224,6 +225,7 @@ public record RobotDescription(String name, RobotBody body, List<ComponentDescri
         return switch (raw) {
             case "wheel" -> ComponentType.WHEEL;
             case "proximitySensor" -> ComponentType.PROXIMITY_SENSOR;
+            case "tool" -> ComponentType.TOOL;
             default -> throw new IllegalArgumentException("unknown type: " + raw);
         };
     }

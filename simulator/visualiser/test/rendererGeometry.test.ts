@@ -1,7 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { DEFAULT_SHAPE, robotWheelRects } from '../src/renderer';
+import {
+  DEFAULT_SHAPE,
+  FRONT_LIGHT_ID,
+  frontLightCircle,
+  frontLightFill,
+  isFrontLightActive,
+  robotWheelRects,
+} from '../src/renderer';
 import type { WheelRect } from '../src/renderer';
 
 const EPS = 1e-9;
@@ -47,4 +54,48 @@ test('wheel mount geometry is rotated into canvas space without changing dimensi
     length: 30,
     width: 8,
   });
+});
+
+test('frontLightCircle sits at the front edge, inside the body and clear of the heading arrow', () => {
+  const circle = frontLightCircle(DEFAULT_SHAPE);
+  assert.equal(circle.radius, 4);
+  // Local +X is forward: the circle is tangent to the front body edge.
+  assert.equal(circle.x + circle.radius, DEFAULT_SHAPE.width / 2);
+  // It stays on/inside the body outline in both canvas axes.
+  assert.ok(circle.x - circle.radius >= -DEFAULT_SHAPE.width / 2);
+  assert.ok(circle.y - circle.radius >= -DEFAULT_SHAPE.height / 2);
+  assert.ok(circle.y + circle.radius <= DEFAULT_SHAPE.height / 2);
+  // The white arrow spans |y| <= 4 near the nose; the circle (offset to +Y,
+  // canvas-down) must not overlap that band.
+  assert.ok(circle.y - circle.radius > 4, `circle at y=${circle.y} overlaps the arrow`);
+});
+
+test('frontLightCircle shrinks and stays inside unusually small bodies', () => {
+  const small = { width: 6, height: 6, wheels: DEFAULT_SHAPE.wheels };
+  const circle = frontLightCircle(small);
+  assert.equal(circle.radius, 3);
+  assert.ok(circle.x - circle.radius >= -small.width / 2);
+  assert.ok(circle.x + circle.radius <= small.width / 2);
+  assert.ok(circle.y - circle.radius >= -small.height / 2);
+  assert.ok(circle.y + circle.radius <= small.height / 2);
+});
+
+test('frontLightFill selects red when active and darker blue otherwise', () => {
+  assert.equal(FRONT_LIGHT_ID, 'front-light');
+  assert.equal(frontLightFill(true), '#ef4444');
+  assert.equal(frontLightFill(false), '#1d4ed8');
+});
+
+test('isFrontLightActive only trusts an active front-light tool state', () => {
+  assert.equal(isFrontLightActive([]), false);
+  assert.equal(isFrontLightActive([{ id: 'other-tool', active: true }]), false);
+  assert.equal(isFrontLightActive([{ id: 'front-light', active: false }]), false);
+  assert.equal(isFrontLightActive([{ id: 'front-light', active: true }]), true);
+  assert.equal(
+    isFrontLightActive([
+      { id: 'other-tool', active: true },
+      { id: 'front-light', active: true },
+    ]),
+    true,
+  );
 });

@@ -5,7 +5,7 @@ Java robot framework and example controller.
 ## Responsibilities
 
 - Runs as a separate Java process (fat JAR `robot.jar`)
-- Provides the student-facing hardware API (Mover, Component, Wheel, ProximitySensor, Brain)
+- Provides the student-facing hardware API (Mover, Component, Wheel, ProximitySensor, Tool, Brain)
 - Hides WebSocket connection, NDJSON framing, reconnection, and concurrency from robot code
 - Invokes a behaviour update method (~20 Hz)
 - Example behaviours: square trace, wall avoidance, wall-follow-right, circle, heart, brownian
@@ -114,6 +114,11 @@ interface ProximitySensor extends Component {
     double distance();     // Infinity if nothing detected
 }
 
+interface Tool extends Component {
+    void activate(); void deactivate();
+    Tool NOOP = ...;       // no-op handle when no tool is declared
+}
+
 interface Mover {
     void forward();        // move forward at full speed
     void backward();
@@ -131,6 +136,7 @@ interface Brain {          // student writes DI/wiring implementation
     Mover mover();
     ProximitySensor frontSensor();
     ProximitySensor rightSensor();
+    Tool tool();           // single manifest tool, or Tool.NOOP
     void setBehaviour(RobotBehaviour behaviour);
     void tick();
 }
@@ -145,10 +151,16 @@ addressed through this API. `ProximitySensor.latestSimTick()` lets behaviour cod
 detect stale readings (the bridge treats a reading older than 30 sim ticks as
 stale).
 
-Robot code implements `RobotBehaviour`, uses the `Mover` and sensors exposed by
-its `Brain` and commands movement via `Wheel`s or the `Mover` abstraction. The
-behaviour loop (`oobot.robot.core.BehaviourLoop`) calls `Brain.tick()` at ~20 Hz,
-then flushes all wheel changes as one batched `componentCommand` frame.
+`tool()` is not a fixed-id lookup: the controller injects the one manifest
+`tool` by type, or `Tool.NOOP` when none is declared. Declaring more than one
+tool fails at startup (usage-style error, exit code 2). Tools have no geometry
+or kinematics effect.
+
+Robot code implements `RobotBehaviour`, uses the `Mover`, sensors and tool
+exposed by its `Brain` and commands movement via `Wheel`s or the `Mover`
+abstraction. The behaviour loop (`oobot.robot.core.BehaviourLoop`) calls
+`Brain.tick()` at ~20 Hz, then flushes wheel and tool changes as one batched
+`componentCommand` frame.
 The reference `WheeledMover` is constructed from the full wheel list
 (`WheeledMover(List<Wheel>)`) and derives left/right roles from each wheel's
 `angle()`; `RobotController` obtains that list from `ComponentRegistry.wheels()`
@@ -159,8 +171,9 @@ The reference `WheeledMover` is constructed from the full wheel list
 Components are placed by **mount angle** plus a radial **offset**, declared in
 the v2 manifest `robots/default.json`. `angle` is in radians: 0 = robot forward,
 positive = counter-clockwise (right = -π/2). `offset` is the radial distance
-from the robot centre (wheels only; default `0.25`, must be finite and > 0).
-Wheels still roll along the robot's heading (tangentially); sensors cast rays in
+from the robot centre (wheels only; default `0.25`, must be finite and > 0);
+tools declare `angle` but no `offset`. Wheels still roll along the robot's
+heading (tangentially); sensors cast rays in
 their mounted direction. Only the Java robot and sim server read the manifest,
 so adding or repositioning a component is a data change, not a code change;
 visualiser changes are deferred.
@@ -173,7 +186,8 @@ visualiser changes are deferred.
     { "id": "left-wheel",   "type": "wheel",           "angle":  1.5707963267948966, "offset": 0.25 },
     { "id": "right-wheel",  "type": "wheel",           "angle": -1.5707963267948966, "offset": 0.25 },
     { "id": "front-sensor", "type": "proximitySensor", "angle":  0.0 },
-    { "id": "right-sensor", "type": "proximitySensor", "angle": -1.5707963267948966 }
+    { "id": "right-sensor", "type": "proximitySensor", "angle": -1.5707963267948966 },
+    { "id": "front-light",  "type": "tool",            "angle":  0.0 }
   ]
 }
 ```
@@ -181,10 +195,13 @@ visualiser changes are deferred.
 - `schemaVersion` must be `2`; a `side` field is rejected and wheel roles are
   **derived** from angle instead: `sin(angle) > 0.9` → left, `sin(angle) < -0.9`
   → right (exactly one of each required; other angles rejected).
+- A `tool` declares a finite `angle`, no `offset` and no geometry effect; the
+  sim accepts any number of tools, but the controller injects only one.
 - Track width is derived from the manifest as `y_left - y_right` =
   `offset_left·sin(angle_left) − offset_right·sin(angle_right)` (`0.5` for the
   default manifest). The sim uses this in place of the default world config's
-  `trackWidth`; the robot stays a point for sensing/collision.
+  `trackWidth`; sensing stays centre-based and collision uses the manifest-derived
+  body/wheel footprint.
 
 ## Wire protocol
 
@@ -196,7 +213,7 @@ record ComponentCommandMessage(long seq, long simTick, ComponentCommandPayload p
 record ComponentSnapshotMessage(long seq, long simTick, ComponentSnapshotPayload payload)
 record ComponentCommandPayload(List<ComponentValue> commands)
 record ComponentSnapshotPayload(List<ComponentReading> readings)
-record ComponentValue(String id, double value)     // wheel value ∈ [-1, 1]
+record ComponentValue(String id, double value)     // wheel ∈ [-1, 1]; tool exactly 0 or 1
 record ComponentReading(String id, Double value)   // null = nothing detected
 ```
 
@@ -205,27 +222,37 @@ and the `{ type, seq, simTick, payload }` envelope are unchanged; messages are
 now id-addressed:
 
 ```json
-{"type":"componentCommand","seq":7,"simTick":142,"payload":{"commands":[{"id":"left-wheel","value":1.0},{"id":"right-wheel","value":-1.0}]}}
+{"type":"componentCommand","seq":7,"simTick":142,"payload":{"commands":[{"id":"left-wheel","value":1.0},{"id":"right-wheel","value":-1.0},{"id":"front-light","value":1.0}]}}
 {"type":"componentSnapshot","seq":7,"simTick":142,"payload":{"readings":[{"id":"front-sensor","value":3.5},{"id":"right-sensor","value":null}]}}
 ```
 
 | Message | Direction | Payload |
 |---|---|---|
-| `componentCommand` | robot → sim | `commands: [{ id, value }]` |
+| `componentCommand` | robot → sim | `commands: [{ id, value }]` (wheels and tools) |
 | `componentSnapshot` | sim → robot | `readings: [{ id, value }]` |
 
-`motorCommand` and `sensorSnapshot` are removed.
+Wheel and tool values share `componentCommand`: tool `1.0` = active, `0.0` =
+inactive; the sim ignores any other tool value. The sim publishes activity in
+`worldSnapshot.robot.toolStates`. `motorCommand` and `sensorSnapshot` are
+removed.
 
 ## Framework behaviour notes
 
 - WebSocket reconnects automatically with a fixed 2000 ms delay when the socket closes.
 - **Two-layer safe stop (D-2).** The Java bridge writes one `componentCommand`
   with *every* bound wheel id at `0.0` before closing or reconnecting the socket;
-  the sim independently zeroes motors when the active robot socket closes. Each
-  layer works on its own (e.g. if the Java process dies).
-- Wheel changes are buffered locally and flushed as one `componentCommand` per
-  behaviour tick; `seq` restarts at 0 on every new connection. Sensor readings
-  are invalidated on close, reconnect and sim-tick rollback.
+  that final frame is wheels-only and the sim independently zeroes motors and
+  clears tool states when the active robot socket closes. Each layer works on
+  its own (e.g. if the Java process dies); Java force-resyncs its persistent tool
+  state on the next connection.
+- Wheel and tool changes are buffered locally and flushed as one
+  `componentCommand` per behaviour tick; `seq` restarts at 0 on every new
+  connection. Sensor readings are invalidated on close, reconnect and sim-tick
+  rollback; `setBehaviour(null)` stops motion and deactivates the tool.
+- `DefaultBrain` injects the single manifest tool (or `Tool.NOOP`). The default
+  `wall-follow-right` behaviour sets the front light active in `APPROACH`,
+  `DRIVE` and `TURN_RIGHT_AT_END`, and inactive in `SEARCH`, `AVOID`,
+  `RECOVER_BACKUP`, `RECOVER_TURN` and `init()`.
 - Malformed JSON is logged and ignored (never crashes); serialisation failures
   throw rather than emitting an empty frame.
 - Behaviour exceptions are caught and logged — a misbehaving behaviour never kills the loop.
@@ -239,7 +266,8 @@ now id-addressed:
 
 JUnit 5 unit tests cover JSON round-trips, manifest validation against
 byte-identical fixtures in `src/test/resources/fixtures/`, the connection
-close/safe-stop contract (fake WebSocket), batching and reconnect state.
+close/safe-stop contract (fake WebSocket), tool injection and light state,
+batching and reconnect state.
 `./gradlew clean fatJar` builds the fat JAR from scratch; `./gradlew test fatJar`
 runs both. CLI `--help`, `--version` and a live end-to-end run against the sim
 remain manual/ad-hoc checks.

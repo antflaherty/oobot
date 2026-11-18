@@ -7,6 +7,8 @@
 // path and, for component-scoped failures, the 0-based component[index].
 
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 
@@ -14,6 +16,7 @@ import {
   ComponentRegistry,
   DEFAULT_ROBOT_BODY,
   RobotBody,
+  RobotDescription,
   loadRobotDescription,
 } from "../src/robotDescription";
 
@@ -33,7 +36,7 @@ interface FixtureCase {
 }
 
 const cases: FixtureCase[] = [
-  { file: "valid-default.json", accept: true, components: 4, trackWidth: 0.5 },
+  { file: "valid-default.json", accept: true, components: 5, trackWidth: 0.5 },
   {
     file: "accept-body.json",
     accept: true,
@@ -128,4 +131,102 @@ test("body defaults to 0.5 x 0.5 with 0.3 x 0.1 wheels when omitted", () => {
     height: 0.5,
     wheels: { length: 0.3, width: 0.1 },
   });
+});
+
+// Tool-specific validation uses inline manifests written to a temporary dir:
+// the committed fixtures are byte-identical across languages and must not be
+// extended just for a sim-only test.
+const BASE_COMPONENTS = [
+  { id: "left-wheel", type: "wheel", angle: 1.5707963267948966, offset: 0.25 },
+  { id: "right-wheel", type: "wheel", angle: -1.5707963267948966, offset: 0.25 },
+  { id: "front-sensor", type: "proximitySensor", angle: 0.0 },
+  { id: "right-sensor", type: "proximitySensor", angle: -1.5707963267948966 },
+];
+
+function withInlineManifest<T>(toolComponents: string[], fn: (path: string) => T): T {
+  const dir = mkdtempSync(join(tmpdir(), "oobot-tool-manifest-"));
+  const path = join(dir, "manifest.json");
+  try {
+    const components = [...BASE_COMPONENTS.map((c) => JSON.stringify(c)), ...toolComponents];
+    writeFileSync(
+      path,
+      `{"schemaVersion":2,"name":"tool-inline","components":[${components.join(",")}]}`,
+    );
+    return fn(path);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("tool: loader accepts point-mounted tools with any finite angle", () => {
+  const description = withInlineManifest(
+    [
+      '{"id":"front-light","type":"tool","angle":0.0}',
+      '{"id":"rear-light","type":"tool","angle":3.0}',
+    ],
+    (path) => loadRobotDescription(path),
+  );
+  assert.equal(description.components.length, 6);
+  assert.deepEqual(
+    description.components.filter((c) => c.type === "tool"),
+    [
+      { id: "front-light", type: "tool", angle: 0.0, offset: 0 },
+      { id: "rear-light", type: "tool", angle: 3.0, offset: 0 },
+    ],
+  );
+});
+
+for (const [label, toolJson, token] of [
+  ["offset", '{"id":"front-light","type":"tool","angle":0.0,"offset":0.25}', "offset"],
+  ["non-finite angle", '{"id":"front-light","type":"tool","angle":1e999}', "angle"],
+] as const) {
+  test(`tool: loader rejects a tool with ${label}`, () => {
+    withInlineManifest([toolJson], (path) => {
+      assert.throws(
+        () => loadRobotDescription(path),
+        (err: unknown) => {
+          assert.ok(err instanceof Error);
+          assert.ok(err.message.includes(path), `error must name path: ${err.message}`);
+          assert.ok(err.message.includes("component[4]"), `error must name index: ${err.message}`);
+          assert.ok(err.message.includes(token), `error must name ${token}: ${err.message}`);
+          return true;
+        },
+      );
+    });
+  });
+}
+
+test("tool: unknown component types are still rejected", () => {
+  withInlineManifest(['{"id":"mystery","type":"laser","angle":0.0}'], (path) => {
+    assert.throws(
+      () => loadRobotDescription(path),
+      (err: unknown) => {
+        assert.ok(err instanceof Error);
+        assert.ok(err.message.includes(path));
+        assert.ok(err.message.includes("component[4]"));
+        assert.ok(err.message.includes("type"));
+        return true;
+      },
+    );
+  });
+});
+
+test("tool: registry keeps tools separate from wheels and sensors in manifest order", () => {
+  const description: RobotDescription = loadRobotDescription(
+    join(FIXTURES, "valid-default.json"),
+  );
+  const registry = new ComponentRegistry(description);
+  assert.deepEqual(
+    registry.tools().map((c) => c.id),
+    ["front-light"],
+  );
+  assert.deepEqual(
+    registry.sensors().map((c) => c.id),
+    ["front-sensor", "right-sensor"],
+  );
+  assert.deepEqual(
+    registry.wheels().map((c) => c.id),
+    ["left-wheel", "right-wheel"],
+  );
+  assert.equal(registry.get("front-light").type, "tool");
 });

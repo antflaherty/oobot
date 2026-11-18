@@ -39,15 +39,17 @@ import java.util.concurrent.atomic.AtomicLong;
  *       {@link RobotDescription} and bind them into a {@link ComponentRegistry}.</li>
  *   <li>Expose that registry via {@link #components()} so a {@link Brain} can
  *       be built against id-addressed components.</li>
- *   <li>Buffer wheel value changes locally and flush them as a single
+ *   <li>Buffer wheel and tool value changes locally and flush them as a single
  *       {@code componentCommand} NDJSON frame at the end of each behaviour
  *       tick (see {@link #flushCommands()}).</li>
  *   <li>Parse incoming {@code componentSnapshot} messages and update the bound
  *       proximity sensor handles; unknown ids are ignored.</li>
  *   <li>On every disconnect/shutdown, write one explicit zero command for all
  *       wheels <em>before</em> closing the socket (D-2 layer B), and invalidate
- *       all sensor readings. The sim independently stops motors on close
- *       (layer A).</li>
+ *       all sensor readings. The zero frame deliberately excludes tools; the
+ *       sim independently stops motors on close (layer A).</li>
+ *   <li>Keep tool on/off state across disconnects and re-send it on the next
+ *       connection, because the sim clears its own tool state on disconnect.</li>
  * </ul>
  * <p>
  * This is the layer that would be swapped for {@code bridge.hardware} when
@@ -83,11 +85,15 @@ public class SimRobot implements RobotPlatform {
     private volatile boolean running = true;
     /** True only while an active socket may accept behaviour commands. */
     private volatile boolean commandsEnabled = false;
+    /** Set on active-socket close: the next connection must re-send tool state. */
+    private volatile boolean toolResyncPending = false;
     private volatile Thread reconnectThread;
 
-    // Persistent actuator state: latest per-wheel value in [-1, 1]. The
-    // commandsDirty flag is guarded by the wheelValues monitor.
+    // Persistent actuator state: latest per-wheel value in [-1, 1] and per-tool
+    // on/off flag. The wheelValues monitor also guards toolValues and
+    // commandsDirty, so a tick's wheel and tool changes share one dirty flag.
     private final Map<String, Double> wheelValues = new LinkedHashMap<>();
+    private final Map<String, Boolean> toolValues = new LinkedHashMap<>();
     private boolean commandsDirty = false;
     private volatile long latestSimTick = 0L;
 
@@ -114,6 +120,13 @@ public class SimRobot implements RobotPlatform {
                     SimProximitySensor sensor = new SimProximitySensor(component.id());
                     sensorsById.put(component.id(), sensor);
                     registry.bind(component.id(), sensor);
+                }
+                case TOOL -> {
+                    SimTool tool = new SimTool(this, component.id());
+                    synchronized (wheelValues) {
+                        toolValues.put(component.id(), false);
+                    }
+                    registry.bind(component.id(), tool);
                 }
             }
         }
@@ -236,6 +249,36 @@ public class SimRobot implements RobotPlatform {
         }
     }
 
+    /**
+     * Called by a tool when its on/off state changes. Unlike wheels, a tool only
+     * makes the next frame dirty when its state actually changes, so repeated
+     * {@code activate()}/{@code deactivate()} calls stay idempotent.
+     */
+    void setToolValue(String id, boolean active) {
+        synchronized (wheelValues) {
+            Boolean current = toolValues.get(id);
+            if (current == null || Boolean.valueOf(active).equals(current)) {
+                return;
+            }
+            toolValues.put(id, active);
+            commandsDirty = true;
+        }
+    }
+
+    /** Package-private test seam: the persistent state of a bound tool. */
+    boolean toolActive(String id) {
+        synchronized (wheelValues) {
+            return Boolean.TRUE.equals(toolValues.get(id));
+        }
+    }
+
+    /** Force the next flush to emit a frame (used for reconnect resync). */
+    private void markCommandsDirty() {
+        synchronized (wheelValues) {
+            commandsDirty = true;
+        }
+    }
+
     private static double clamp(double s) {
         if (!Double.isFinite(s)) return 0.0;
         if (s > 1.0) return 1.0;
@@ -244,11 +287,12 @@ public class SimRobot implements RobotPlatform {
     }
 
     /**
-     * Send every wheel value changed since the last flush as one
-     * {@code componentCommand}. Invoked by {@link BehaviourLoop} after each
-     * {@link Brain#tick()}, so a tick that moves both wheels emits exactly one
-     * frame. Does nothing when no value changed or no socket is connected.
-     * Package-private for tests in this package.
+     * Send the persistent wheel and tool values as one {@code componentCommand}
+     * when something changed since the last flush. Invoked by
+     * {@link BehaviourLoop} after each {@link Brain#tick()}, so a tick that
+     * changes wheels and tools emits exactly one frame. Does nothing when
+     * nothing changed or no socket is connected. Package-private for tests in
+     * this package.
      */
     void flushCommands() {
         List<ComponentValue> commands;
@@ -267,6 +311,9 @@ public class SimRobot implements RobotPlatform {
                 for (Map.Entry<String, Double> entry : wheelValues.entrySet()) {
                     commands.add(new ComponentValue(entry.getKey(), entry.getValue()));
                 }
+                for (Map.Entry<String, Boolean> entry : toolValues.entrySet()) {
+                    commands.add(new ComponentValue(entry.getKey(), entry.getValue() ? 1.0 : 0.0));
+                }
                 commandsDirty = false;
             }
             sequence = seq.getAndIncrement();
@@ -280,8 +327,9 @@ public class SimRobot implements RobotPlatform {
 
     /**
      * Build the exact safe-stop frame: one entry for every bound wheel id at
-     * 0.0, using the next unused seq and the last seen simTick. Caller holds
-     * {@link #connectionLock}.
+     * 0.0, using the next unused seq and the last seen simTick. Tool entries are
+     * deliberately excluded (D-2 frame shape); tool state stays persistent and
+     * is re-sent on the next connection. Caller holds {@link #connectionLock}.
      */
     private String nextZeroCommandFrameLocked() {
         List<ComponentValue> zeros = new ArrayList<>();
@@ -420,6 +468,15 @@ public class SimRobot implements RobotPlatform {
             // new socket until seq is back at 0 and sensors are invalidated.
             seq.set(0);
             clearSensorStateLocked();
+            if (toolResyncPending) {
+                // Force the next flush to carry the tool state even if no
+                // behaviour command changed in the meantime. Manifests with no
+                // tools need no extra frame.
+                if (!toolValues.isEmpty()) {
+                    markCommandsDirty();
+                }
+                toolResyncPending = false;
+            }
             connection = c;
             activeConnectionId = id;
             commandsEnabled = true;
@@ -457,6 +514,9 @@ public class SimRobot implements RobotPlatform {
             c = connection;
             zeroFrame = nextZeroCommandFrameLocked();
             clearSensorStateLocked();
+            // The sim clears its tool state on disconnect; remember to push our
+            // persistent state again once a replacement socket is established.
+            toolResyncPending = true;
             connection = null;
             activeConnectionId = -1L;
         }

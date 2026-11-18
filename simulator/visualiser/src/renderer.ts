@@ -1,4 +1,4 @@
-import type { RobotPose, Obstacle, RobotShape } from "./types";
+import type { RobotPose, Obstacle, RobotShape, ToolState } from "./types";
 import { lerp } from "./math";
 
 // World is an 800x600 unit box centred at origin; canvas is 800x600 px.
@@ -47,6 +47,14 @@ const ARROW_FILL = "#ffffff";
 const OBSTACLE_FILL = "#1e293b"; // dark obstacles
 const OBSTACLE_STROKE = "#0f172a";
 
+// Front-light tool indicator (id from the shared robot manifest; the
+// visualiser does not read the manifest itself, just the published states).
+export const FRONT_LIGHT_ID = "front-light";
+const FRONT_LIGHT_RADIUS = 4; // px; world units == pixels at 1:1
+const FRONT_LIGHT_ACTIVE_FILL = "#ef4444"; // red while lit
+const FRONT_LIGHT_INACTIVE_FILL = "#1d4ed8"; // darker than the blue body
+const FRONT_LIGHT_STROKE = "#0f172a"; // same dark outline as wheels/obstacles
+
 /** A wheel rectangle in body-local CANVAS coordinates (X right, Y down),
  * before the heading rotation is applied. Dimensions are full extents. */
 export interface WheelRect {
@@ -66,6 +74,36 @@ export function robotWheelRects(shape: RobotShape): WheelRect[] {
     length: wheel.length,
     width: wheel.width,
   }));
+}
+
+/** Circle for the front-light indicator, in body-local CANVAS coordinates
+ * (local +X forward, +Y down after the world-to-canvas flip).
+ *
+ * The circle is tangent to the front edge (local +X = width/2) and offset
+ * toward +Y so it stays clear of the white heading arrow, which sits at
+ * |y| <= ARROW_WIDTH near the nose. Both axes are clamped so the circle stays
+ * on/inside the body outline even for unusually small shapes.
+ */
+export function frontLightCircle(shape: RobotShape): {
+  x: number;
+  y: number;
+  radius: number;
+} {
+  const radius = Math.min(FRONT_LIGHT_RADIUS, shape.width / 2, shape.height / 2);
+  const x = shape.width / 2 - radius;
+  const y = Math.min(shape.height / 4, shape.height / 2 - radius);
+  return { x, y, radius };
+}
+
+/** Fill colour for the front-light indicator (pure, so it can be tested without a canvas). */
+export function frontLightFill(active: boolean): string {
+  return active ? FRONT_LIGHT_ACTIVE_FILL : FRONT_LIGHT_INACTIVE_FILL;
+}
+
+/** True only when a published tool state says the front light is active.
+ * Missing or unknown ids default to inactive. */
+export function isFrontLightActive(toolStates: ToolState[]): boolean {
+  return toolStates.some((tool) => tool.id === FRONT_LIGHT_ID && tool.active === true);
 }
 
 // ---------------------------------------------------------------------------
@@ -210,8 +248,12 @@ export class Renderer {
     }
   }
 
-  /** Draw the robot as a rectangle body, two mounted wheels and a heading arrow. */
-  drawRobot(pose: RobotPose, shape: RobotShape | null = DEFAULT_SHAPE): void {
+  /** Draw the robot as a rectangle body, front-light indicator and heading arrow. */
+  drawRobot(
+    pose: RobotPose,
+    shape: RobotShape | null = DEFAULT_SHAPE,
+    toolStates: ToolState[] = [],
+  ): void {
     const { ctx } = this;
     const bodyShape = shape ?? DEFAULT_SHAPE;
     // World origin (0,0) maps to canvas centre (400,300). World +Y is up, so
@@ -255,6 +297,17 @@ export class Renderer {
     ctx.lineWidth = 1.5;
     ctx.stroke();
 
+    // Front-light tool indicator: after the body so it is not covered, before
+    // the heading arrow so the arrow stays legible on top of it.
+    const light = frontLightCircle(bodyShape);
+    ctx.beginPath();
+    ctx.arc(light.x, light.y, light.radius, 0, Math.PI * 2);
+    ctx.fillStyle = frontLightFill(isFrontLightActive(toolStates));
+    ctx.fill();
+    ctx.strokeStyle = FRONT_LIGHT_STROKE;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+
     // Heading arrow: a filled triangle pointing along the local +X axis
     // (i.e. in the direction of `heading`).
     ctx.beginPath();
@@ -278,11 +331,12 @@ export class Renderer {
     pose: RobotPose,
     obstacles: Obstacle[] = [],
     shape: RobotShape | null = DEFAULT_SHAPE,
+    toolStates: ToolState[] = [],
   ): void {
     this.clear();
     this.drawTrail();
     this.drawWorld();
     this.drawObstacles(obstacles);
-    this.drawRobot(pose, shape);
+    this.drawRobot(pose, shape, toolStates);
   }
 }

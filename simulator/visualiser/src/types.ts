@@ -31,6 +31,14 @@ export interface RobotShape {
   }>;
 }
 
+// State of one id-addressed tool declared by the robot manifest (e.g.
+// "front-light"). The visualiser does not read the manifest; it only renders
+// the states published on the wire snapshot.
+export interface ToolState {
+  id: string;
+  active: boolean;
+}
+
 // worldSnapshot payload — see specs/WIRE_PROTOCOL.md §6.2
 export interface WorldSnapshotPayload {
   robot: {
@@ -41,6 +49,8 @@ export interface WorldSnapshotPayload {
     heading: number;
     // Optional for older snapshots; the sim always sends it.
     shape?: RobotShape;
+    // Optional for older snapshots; absent means no tool indicators.
+    toolStates?: ToolState[];
   };
   obstacles: Obstacle[]; // static obstacles (iteration 2)
 }
