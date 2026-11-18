@@ -23,12 +23,14 @@ import oobot.robot.example.WheeledMover;
 import oobot.robot.student.Brain;
 import oobot.robot.student.BrownianMotionBehaviour;
 import oobot.robot.student.Mover;
-import oobot.robot.student.ProximitySensor;
 import oobot.robot.student.RobotBehaviour;
+import oobot.robot.student.Sensor;
+import oobot.robot.student.Tool;
 
 import java.net.URISyntaxException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Set;
 
 /**
@@ -36,7 +38,9 @@ import java.util.Set;
  *
  * <p>Usage: {@code java -jar robot.jar [--host localhost] [--port 8080]
  * [--robot ../robots/default.json]
- * [--behaviour square|wall-avoid|wall-follow-right|circle|heart|brownian]}
+ * [--behaviour wall-follow-right|square|wall-avoid|circle|heart|brownian]}
+ * <p>The brain owns goal arrival: whatever behaviour is selected, a fresh
+ * goal-sensor "inside" reading stops the robot and lights the tool for good.
  *
  * <p>The default {@code --robot} path is relative to the framework directory
  * (the JAR's parent), so the controller can be launched from any working
@@ -49,7 +53,7 @@ import java.util.Set;
 public class RobotController implements Runnable {
     private static final Logger log = LoggerFactory.getLogger(RobotController.class);
     private static final Set<String> VALID_BEHAVIOURS = Set.of(
-            "square", "wall-avoid", "wall-follow-right", "circle", "heart", "brownian");
+            "wall-follow-right", "square", "wall-avoid", "circle", "heart", "brownian");
 
     /**
      * Default manifest, resolved against the framework directory (see
@@ -61,6 +65,7 @@ public class RobotController implements Runnable {
     /** Fixed ids required by the non-generic {@link Brain} sensor accessors (D-3). */
     private static final String FRONT_SENSOR_ID = "front-sensor";
     private static final String RIGHT_SENSOR_ID = "right-sensor";
+    private static final String GOAL_SENSOR_ID = "goal-sensor";
 
     @Spec
     private CommandSpec spec;
@@ -74,7 +79,7 @@ public class RobotController implements Runnable {
     private int port;
 
     @Option(names = "--behaviour", defaultValue = "wall-follow-right",
-            description = "Behaviour: square|wall-avoid|wall-follow-right|circle|heart|brownian (default: ${DEFAULT-VALUE})")
+            description = "Behaviour: wall-follow-right|square|wall-avoid|circle|heart|brownian (default: ${DEFAULT-VALUE})")
     private String behaviourName;
 
     @Option(names = "--robot",
@@ -106,12 +111,14 @@ public class RobotController implements Runnable {
 
         // Build the robot-side mover from the manifest-declared wheels.
         Mover mover = new WheeledMover(reg.wheels());
-        ProximitySensor front = reg.sensor(FRONT_SENSOR_ID);
-        ProximitySensor right = reg.sensor(RIGHT_SENSOR_ID);
+        Sensor<Double> front = reg.sensor(FRONT_SENSOR_ID);
+        Sensor<Double> right = reg.sensor(RIGHT_SENSOR_ID);
+        Sensor<Boolean> goal = reg.booleanSensor(GOAL_SENSOR_ID);
+        Tool tool = requireSingleTool(reg, manifest);
 
-        RobotBehaviour behaviour = createBehaviour(behaviourName, mover, front, right);
+        RobotBehaviour behaviour = createBehaviour(behaviourName, mover, front, right, tool);
 
-        Brain brain = new DefaultBrain(mover, front, right);
+        Brain brain = new DefaultBrain(mover, front, right, goal, tool);
         brain.setBehaviour(behaviour);
 
         Runtime.getRuntime().addShutdownHook(new Thread(platform::stop, "robot-shutdown"));
@@ -163,18 +170,36 @@ public class RobotController implements Runnable {
      * message naming both the missing id and the manifest path.
      */
     private void requireFixedSensors(RobotDescription desc, Path manifest) {
-        requireFixedSensor(desc, manifest, FRONT_SENSOR_ID, "frontSensor");
-        requireFixedSensor(desc, manifest, RIGHT_SENSOR_ID, "rightSensor");
+        requireFixedSensor(desc, manifest, FRONT_SENSOR_ID, ComponentType.PROXIMITY_SENSOR,
+                "proximitySensor", "frontSensor");
+        requireFixedSensor(desc, manifest, RIGHT_SENSOR_ID, ComponentType.PROXIMITY_SENSOR,
+                "proximitySensor", "rightSensor");
+        requireFixedSensor(desc, manifest, GOAL_SENSOR_ID, ComponentType.GOAL_SENSOR,
+                "goalSensor", "goalSensor");
     }
 
-    private void requireFixedSensor(RobotDescription desc, Path manifest,
-                                    String id, String accessor) {
+    private void requireFixedSensor(RobotDescription desc, Path manifest, String id,
+                                    ComponentType type, String typeName, String accessor) {
         boolean present = desc.components().stream()
-                .anyMatch(c -> c.id().equals(id) && c.type() == ComponentType.PROXIMITY_SENSOR);
+                .anyMatch(c -> c.id().equals(id) && c.type() == type);
         if (!present) {
-            throw failure("Manifest " + manifest + " must declare a proximitySensor with id '"
+            throw failure("Manifest " + manifest + " must declare a " + typeName + " with id '"
                     + id + "' (required by Brain." + accessor + "()).");
         }
+    }
+
+    /**
+     * Discover tools by manifest TYPE (never by a hardcoded id). The student
+     * {@link Brain#tool()} accessor can drive only one tool; zero tools is fine
+     * and injects {@link Tool#NOOP}.
+     */
+    private Tool requireSingleTool(ComponentRegistry registry, Path manifest) {
+        List<Tool> tools = registry.tools();
+        if (tools.size() > 1) {
+            throw failure("Manifest " + manifest + " declares " + tools.size()
+                    + " tools, but Brain.tool() supports exactly one tool.");
+        }
+        return tools.isEmpty() ? Tool.NOOP : tools.get(0);
     }
 
     private CommandLine.ParameterException failure(String message) {
@@ -206,11 +231,12 @@ public class RobotController implements Runnable {
     }
 
     private RobotBehaviour createBehaviour(String name, Mover mover,
-                                           ProximitySensor front, ProximitySensor right) {
+                                           Sensor<Double> front, Sensor<Double> right,
+                                           Tool tool) {
         return switch (name) {
             case "square" -> new SquareTraceBehaviour(mover, front, right);
             case "wall-avoid" -> new WallAvoidBehaviour(mover, front, right);
-            case "wall-follow-right" -> new WallFollowRightBehaviour(mover, front, right);
+            case "wall-follow-right" -> new WallFollowRightBehaviour(mover, front, right, tool);
             case "circle" -> new CircleTraceBehaviour(mover, front, right);
             case "heart" -> new HeartTraceBehaviour(mover, front, right);
             case "brownian" -> new BrownianMotionBehaviour(mover, front, right);

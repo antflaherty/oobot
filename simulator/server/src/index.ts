@@ -20,7 +20,7 @@ import { WebSocketTransport } from "./transport";
 import { SimEngine } from "./sim";
 import { loadRobotDescription } from "./robotDescription";
 import { toRobotShape } from "./geometry";
-import { TransportOptions, RobotPose, Obstacle } from "./types";
+import { TransportOptions, RobotPose, Obstacle, GoalArea } from "./types";
 import {
   loadWorldFile,
   WorldConfig,
@@ -82,12 +82,14 @@ async function main(): Promise<void> {
   let worldConfig: WorldConfig | undefined;
   let startPose: RobotPose = { x: 0, y: 0, heading: 0 };
   let obstacles: Obstacle[] = [];
+  let goal: GoalArea | null = null;
 
   try {
     const loaded = loadWorldFile(worldFile, shape);
     worldConfig = loaded.config;
     startPose = loaded.startPose;
     obstacles = loaded.obstacles;
+    goal = loaded.goal;
     log(
       `loaded world file: ${worldFile} ` +
         `(box ${loaded.config.width}x${loaded.config.height}, ${obstacles.length} obstacles, ` +
@@ -101,7 +103,7 @@ async function main(): Promise<void> {
     );
   }
 
-  const sim = new SimEngine(transport, robotDescription, worldConfig, startPose, obstacles);
+  const sim = new SimEngine(transport, robotDescription, worldConfig, startPose, obstacles, goal);
 
   process.on("SIGINT", async () => {
     log("SIGINT received — shutting down");

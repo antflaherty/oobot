@@ -11,7 +11,7 @@
 // `new LiveStream()` in main.ts keeps working unchanged.
 // ---------------------------------------------------------------------------
 
-import type { WorldSnapshot, RobotPose, Obstacle, RobotShape } from './types';
+import type { WorldSnapshot, RobotPose, Obstacle, RobotShape, ToolState, GoalArea } from './types';
 import { angleLerp, clamp01, lerp } from './math';
 
 const VISUALISER_PORT = 8081;
@@ -71,6 +71,48 @@ function parseRobotShape(value: unknown): RobotShape | null {
   return wheelsValid ? (value as RobotShape) : null;
 }
 
+/** Defensively narrow the optional wire toolStates field.
+ *
+ * Policy: malformed *entries* are skipped individually, so one bad tool cannot
+ * hide the state of the others. An absent or non-array field yields an empty
+ * list, meaning every tool is shown as inactive (the renderer's default).
+ * Entries are normalised to plain {id, active} objects rather than passing the
+ * wire objects through to the renderer.
+ */
+function parseToolStates(value: unknown): ToolState[] {
+  if (!Array.isArray(value)) return [];
+  const result: ToolState[] = [];
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
+    const tool = entry as { id?: unknown; active?: unknown };
+    if (typeof tool.id !== 'string' || tool.id.trim().length === 0) continue;
+    if (typeof tool.active !== 'boolean') continue;
+    result.push({ id: tool.id, active: tool.active });
+  }
+  return result;
+}
+
+/** Defensively narrow the optional wire goal area. Absent, null or malformed
+ * data yields null, meaning "no goal drawn". Extra keys are ignored. */
+function parseGoal(value: unknown): GoalArea | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const goal = value as {
+    x?: unknown;
+    y?: unknown;
+    width?: unknown;
+    height?: unknown;
+  };
+  if (
+    !isFiniteNumber(goal.x) ||
+    !isFiniteNumber(goal.y) ||
+    !isFiniteNumber(goal.width) ||
+    !isFiniteNumber(goal.height)
+  ) {
+    return null;
+  }
+  return value as GoalArea;
+}
+
 /** Narrow a parsed NDJSON line to a snapshot whose fields are safe to render. */
 function isValidSnapshot(value: unknown): value is WorldSnapshot {
   if (typeof value !== 'object' || value === null) return false;
@@ -99,6 +141,8 @@ export class LiveStream {
   private reconnectTimer: number | null = null;
   private latestObstacles: Obstacle[] = [];
   private latestRobotShape: RobotShape | null = null;
+  private latestToolStates: ToolState[] = [];
+  private latestGoal: GoalArea | null = null;
   private onTrailPoint: ((x: number, y: number) => void) | null = null;
   private onTrailReset: (() => void) | null = null;
 
@@ -163,6 +207,21 @@ export class LiveStream {
     return this.latestRobotShape;
   }
 
+  /** Returns the latest parsed tool states (empty when absent/malformed). */
+  getToolStates(): ToolState[] {
+    return this.latestToolStates;
+  }
+
+  /** Returns the latest goal area, or null when absent/malformed. */
+  getGoal(): GoalArea | null {
+    return this.latestGoal;
+  }
+
+  /** True only when the given tool id is currently reported active. */
+  isToolActive(id: string): boolean {
+    return this.latestToolStates.some((tool) => tool.id === id && tool.active);
+  }
+
   /** Register a callback invoked with each new snapshot's robot pose so the
    * trail can be recorded from the authoritative position stream rather than
    * from render frames (which pause while the tab is hidden). */
@@ -186,6 +245,8 @@ export class LiveStream {
     this.baseTime = 0;
     this.latestObstacles = [];
     this.latestRobotShape = null;
+    this.latestToolStates = [];
+    this.latestGoal = null;
     this.lineBuffer = '';
     this.onTrailReset?.();
   }
@@ -334,6 +395,13 @@ export class LiveStream {
     // Shape is optional on the wire: absent or malformed data clears the cache
     // so the renderer falls back to its default geometry instead of drawing NaN.
     this.latestRobotShape = parseRobotShape(snapshot.payload.robot.shape);
+    // Tool states follow the same rule as the shape: absent or malformed data
+    // clears the cache, so an older/newer sim that stops publishing a tool
+    // cannot leave a stale indicator lit.
+    this.latestToolStates = parseToolStates(snapshot.payload.robot.toolStates);
+    // Goal is optional on the wire: absent, null or malformed clears the cache
+    // so an older/newer sim cannot leave a stale goal rectangle on screen.
+    this.latestGoal = parseGoal(snapshot.payload.goal);
 
     // Record the trail point from the authoritative snapshot stream so the
     // path keeps tracing even while requestAnimationFrame is paused (tab hidden).

@@ -58,9 +58,26 @@ export interface Obstacle {
   height: number; // full height, world units
 }
 
+// Axis-aligned goal area, using the same centre-based convention as Obstacle:
+// (x, y) is the centre and width/height are the full extents. Only the robot's
+// centre point is tested against it; the physical footprint is irrelevant.
+export interface GoalArea {
+  x: number;   // centre X, world units
+  y: number;   // centre Y, world units
+  width: number;  // full width, world units
+  height: number; // full height, world units
+}
+
+export interface ToolState { id: string; active: boolean }
+
 export interface WorldSnapshotPayload {
-  robot: { x: number; y: number; heading: number; shape?: RobotShape }; // heading: radians, 0 = +X axis
+  // toolStates is authoritative sim state, one entry per declared tool in
+  // manifest order; optional so older snapshots remain valid.
+  robot: { x: number; y: number; heading: number; shape?: RobotShape; toolStates?: ToolState[] }; // heading: radians, 0 = +X axis
   obstacles: Obstacle[]; // static obstacles (iteration 2)
+  // Sim always emits this; null when the world declares no goal. Optional so
+  // older snapshots remain valid.
+  goal?: GoalArea | null;
 }
 
 export interface RobotPose {

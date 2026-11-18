@@ -1,13 +1,13 @@
 import { readFileSync } from 'node:fs';
 
-export type ComponentType = 'wheel' | 'proximitySensor';
+export type ComponentType = 'wheel' | 'proximitySensor' | 'goalSensor' | 'tool';
 
 export interface ComponentDescription {
   id: string;
   type: ComponentType;
   angle: number;
   // Radial distance from the centre along the mount angle. Wheels default to
-  // 0.25; sensors are point-mounted (0) and may not declare one.
+  // 0.25; sensors and tools are point-mounted (0) and may not declare one.
   offset: number;
 }
 
@@ -27,7 +27,12 @@ export interface RobotDescription {
   components: ComponentDescription[];
 }
 
-const COMPONENT_TYPES: ReadonlySet<string> = new Set<ComponentType>(['wheel', 'proximitySensor']);
+const COMPONENT_TYPES: ReadonlySet<string> = new Set<ComponentType>([
+  'wheel',
+  'proximitySensor',
+  'goalSensor',
+  'tool',
+]);
 const DEFAULT_WHEEL_OFFSET = 0.25;
 
 // Applied when the manifest omits `body` (or a member of it).
@@ -173,7 +178,10 @@ export function loadRobotDescription(path: string): RobotDescription {
     ids.add(id);
 
     if (typeof component.type !== 'string' || !COMPONENT_TYPES.has(component.type)) {
-      return fail(path, `${at}.type (id "${id}") must be "wheel" or "proximitySensor"`);
+      return fail(
+        path,
+        `${at}.type (id "${id}") must be "wheel", "proximitySensor", "goalSensor" or "tool"`,
+      );
     }
     const type = component.type as ComponentType;
 
@@ -214,8 +222,11 @@ export function loadRobotDescription(path: string): RobotDescription {
 
       components.push({ id, type, angle, offset });
     } else {
+      // Proximity sensors, goal sensors and tools are point-mounted: an angle
+      // is required (checked above) and an offset is forbidden. None adds a
+      // wheel-role constraint.
       if (declaresOffset) {
-        return fail(path, `${at}.offset must not be declared for proximitySensor "${id}"`);
+        return fail(path, `${at}.offset must not be declared for ${type} "${id}"`);
       }
       components.push({ id, type, angle, offset: 0 });
     }
@@ -232,14 +243,20 @@ export class ComponentRegistry {
   private readonly byId = new Map<string, ComponentDescription>();
   private readonly wheelComponents: ComponentDescription[] = [];
   private readonly sensorComponents: ComponentDescription[] = [];
+  private readonly goalSensorComponents: ComponentDescription[] = [];
+  private readonly toolComponents: ComponentDescription[] = [];
 
   constructor(description: RobotDescription) {
     for (const component of description.components) {
       this.byId.set(component.id, component);
       if (component.type === 'wheel') {
         this.wheelComponents.push(component);
-      } else {
+      } else if (component.type === 'proximitySensor') {
         this.sensorComponents.push(component);
+      } else if (component.type === 'goalSensor') {
+        this.goalSensorComponents.push(component);
+      } else if (component.type === 'tool') {
+        this.toolComponents.push(component);
       }
     }
   }
@@ -256,8 +273,19 @@ export class ComponentRegistry {
     return [...this.wheelComponents];
   }
 
+  // Proximity sensors only; goal sensors are exposed separately.
   sensors(): ComponentDescription[] {
     return [...this.sensorComponents];
+  }
+
+  // Declared goal sensors in manifest order. Never includes other components.
+  goalSensors(): ComponentDescription[] {
+    return [...this.goalSensorComponents];
+  }
+
+  // Declared tools in manifest order. Never includes wheels or sensors.
+  tools(): ComponentDescription[] {
+    return [...this.toolComponents];
   }
 
   wheelPair(): { left: ComponentDescription; right: ComponentDescription } {

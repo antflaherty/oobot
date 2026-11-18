@@ -4,8 +4,8 @@ Object Oriented Robotics — MVP
 
 **Status:** current. Describes the implemented sim-side `Transport` abstraction
 and its `WebSocketTransport` implementation (`simulator/server/src/types.ts`,
-`transport.ts`). Connection limits and sequencing follow `WIRE_PROTOCOL.md` and
-`docs/DECISIONS.md` D-2/D-4.
+`transport.ts`). Connection limits, tool state and sequencing follow
+`WIRE_PROTOCOL.md` and `docs/DECISIONS.md` D-2/D-4.
 
 ## 1. Purpose
 
@@ -97,8 +97,8 @@ the sim engine or robot code.
 | Accepting connections, assigning ids, routing by channel | Transport |
 | Bind/origin checks, per-connection outbound `seq`, drop-oldest queue | Transport |
 | Bounded shutdown (close all sockets, cap `server.close()` wait) | Transport |
-| Persistent actuator state, active-robot slot, D-4 seq/tick checks | Sim |
-| Safe-stop on active-robot close / sim shutdown (D-2 layer A) | Sim |
+| Persistent wheel/tool state, active-robot slot, D-4 seq/tick checks | Sim |
+| Safe-stop (zero wheels, clear tools) on active-robot close / sim shutdown (D-2 layer A) | Sim |
 | Explicit zero command written before Java socket close (D-2 layer B) | Java bridge (`SimRobot` / `WsConnection`) |
 | Publishing `worldSnapshot` to visualisers | Sim (calls `transport.broadcast`) |
 | Never blocking the sim tick on I/O | Both — all send paths are non-blocking |
@@ -214,20 +214,25 @@ For each inbound envelope, in this order:
 
 On acceptance only, update `lastAppliedSeq = seq` and
 `lastSeenTick = max(lastSeenTick ?? simTick, simTick)`, then apply wheel values
-(clamped to `[-1, 1]`) to persistent actuator state. Unknown/non-wheel ids are
-logged and ignored individually. A new active robot connection resets both
-tracking values; rejected commands never touch actuators. High-frequency reject
-events are counted and reported with the 5 s achieved-Hz log (plus
+(clamped to `[-1, 1]`) and tool values (exactly `0` = inactive or `1` = active;
+anything else is ignored) to persistent state. Unknown/non-wheel/non-tool ids
+are logged and ignored individually. A new active robot connection resets both
+tracking values; rejected commands never touch wheels or tools. High-frequency
+reject events are counted and reported with the 5 s achieved-Hz log (plus
 `SimEngine.getState()`), not logged per command.
 
 ### 5.2 Publish `componentSnapshot` (sim → robot)
 
-Every sim tick the sim builds one snapshot with one reading per manifest
-proximity sensor and sends it to the active robot connection via
-`transport.send(...)` (non-blocking). If no robot is connected, the send is a
-no-op. The snapshot carries the sim tick it describes; the Java bridge resets
-sensor values on disconnect/reconnect/tick rollback and exposes
-`ProximitySensor.latestSimTick()` for staleness checks (`specs/SENSORS.md`).
+Every sim tick the sim builds one snapshot with one reading per manifest sensor
+— proximity and goal sensors alike — and sends it to the active robot
+connection via `transport.send(...)` (non-blocking). Proximity readings are
+distances (`null` means nothing detected); a declared `goal-sensor` reading is
+`1` (robot centre inside the goal), `0` (outside) or `null` (world has no goal).
+`componentCommand`s targeting `goal-sensor` are read-only and ignored by the
+sim. If no robot is connected, the send is a no-op. The snapshot carries the
+sim tick it describes; the Java bridge resets all sensor values on
+disconnect/reconnect/tick rollback and exposes `Sensor<T>.latestSimTick()` for
+staleness checks (`specs/SENSORS.md`, `specs/WIRE_PROTOCOL.md`).
 
 ## 6. Publish/subscribe to visualiser clients
 
@@ -238,8 +243,10 @@ visualiser `worldSnapshot` only. No `userControl` messages are sent or handled.
 
 Every sim tick the sim calls
 `transport.broadcast("visualiser", worldSnapshotEnvelope)`. The envelope has
-`payload.robot: { x, y, heading }` and `payload.obstacles: [...]`. The sim does
-not wait for acknowledgement or for a visualiser to drain its socket.
+`payload.robot: { x, y, heading, shape?, toolStates? }` (shape in world units;
+one `{ id, active }` entry per declared tool) and `payload.obstacles: [...]`.
+The sim does not wait for acknowledgement or for a visualiser to drain its
+socket.
 
 ### 6.2 Drop-oldest backpressure
 
@@ -262,10 +269,12 @@ derived state on every open and on tick rollback (D-5).
 | Disallowed `Origin` (`null`, non-http(s), non-loopback host) | Reject upgrade with close code 1008; log. |
 | Port already in use / bind error | `listen()` rejects with the original error; partially bound siblings close; process exits non-zero fast. |
 | `componentCommand` from wrong channel/connection | Log and ignore; D-4 state and actuators untouched. |
-| Duplicate/stale/invalid `componentCommand` | Log/count and ignore; no actuator change. |
-| Active robot socket closes or process dies | Sim safe-stops motors (D-2 layer A); Java had tried to write its zero frame first (layer B). |
+| Duplicate/stale/invalid `componentCommand` | Log/count and ignore; no wheel/tool state change. |
+| Invalid tool value (not exactly `0` or `1`) | Log/count and ignore; tool state unchanged. |
+| `componentCommand` targeting read-only `goal-sensor` | Log/count and ignore; no sensor or actuator state change. |
+| Active robot socket closes or process dies | Sim zeroes motors and clears tools (D-2 layer A); Java had tried to write its wheels-only zero frame first (layer B). |
 | Stale robot socket closes | Log and ignore; active robot keeps running. |
-| Tick rollback / reconnect seen by Java | Invalidate sensor readings (distance → `Infinity`, tick → 0). |
+| Tick rollback / reconnect seen by Java | Invalidate all sensor readings (proximity value → `Infinity`, goal value → `false`, tick → 0). |
 | Send failure to one visualiser | Log and close that client; sim continues. |
 | Hung-but-connected process | Deferred beyond MVP: no heartbeat/timeout; WebSocket close is the only close trigger. |
 | Shutdown with an unresponsive peer | Sockets are terminated and server close waits are capped at ~2 s. |
@@ -288,8 +297,9 @@ Implement a transport behind the same `Transport` interface:
 - Envelope: `{ type, seq, simTick, payload }`; NDJSON where a text transport is
   used; `simTick` as freshness source.
 - Message types: `componentCommand`, `componentSnapshot`, `worldSnapshot`.
-- Student API: behaviours use `Mover` and `ProximitySensor` from their `Brain`;
-  they never know which bridge/transport is underneath.
+- Student API: behaviours use `Mover`, generic `Sensor<T>` handles
+  (`Sensor<Double>` for proximity, `Sensor<Boolean>` for the goal) and `Tool`
+  from their `Brain`; they never know which bridge/transport is underneath.
 
 This is a rationale for the abstraction, not an implemented transport.
 
@@ -306,7 +316,7 @@ Robot (Java)                    Transport                    Sim
     |--- componentCommand {seq,tick,commands} ----------------->|
     |                               |-- onMessage(id,channel,env)|
     |                               |                          | validate channel/seq/tick (D-4)
-    |                               |                          | apply wheel values (persistent)
+    |                               |                          | apply wheel/tool values (persistent)
     |<-- componentSnapshot {seq,tick,readings} -----------------|
     |            (one batched command per ~20 Hz behaviour tick; snapshots every ~60 Hz)
 ```
@@ -321,12 +331,13 @@ Robot (Java)                    Transport                    Sim
     |   (still open: send -> flush) --------------------------->|
     |-- clear open, close socket ------------------------------>|
     |                               |-- onDisconnect ---------->|
-    |                               |                          | zero actuators; clear slot
+    |                               |                          | zero wheels, clear tools; clear slot
 ```
 
-If the Java process dies without writing the frame, the close event alone
-still triggers layer A. A displaced/stale robot's close does not stop the
-active robot.
+The final zero frame is wheels-only; the sim clears tool states locally and
+Java force-resyncs its persistent tool state after reconnect. If the Java
+process dies without writing the frame, the close event alone still triggers
+layer A. A displaced/stale robot's close does not stop the active robot.
 
 ### 9.3 Visualiser connects and receives snapshots
 
@@ -335,7 +346,7 @@ Visualiser (browser)            Transport                    Sim
     |--- WebSocket connect (VISUALISER_PORT, allowed Origin) -->|
     |                               |-- onConnect(id,"visualiser")>
     |                               |                          | add to broadcast set
-    |<-- worldSnapshot {robot,obstacles} (per tick) ------------|
+    |<-- worldSnapshot {robot,toolStates,obstacles} (per tick) -|
     |                               |                          | drop-oldest if tab is behind
     |--- socket closes ---------------------------------------->|
     |                               |-- onDisconnect ---------->| remove from set

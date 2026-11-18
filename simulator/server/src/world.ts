@@ -52,7 +52,7 @@ export const DEFAULT_WORLD_CONFIG: WorldConfig = {
   tickRate: 60,
 };
 
-import { Obstacle, RobotPose } from "./types";
+import { GoalArea, Obstacle, RobotPose } from "./types";
 
 export const DEFAULT_START_POSE: RobotPose = { x: 0, y: 0, heading: 0 };
 
@@ -73,6 +73,10 @@ export class WorldModel {
   // Physical collision footprint in world units (body + wheel boxes).
   public readonly shape: RobotShape;
 
+  // Optional goal area from the world file. Null when the world has no goal;
+  // only the robot's centre point is tested against it (never the footprint).
+  public readonly goal: GoalArea | null;
+
   private readonly dt: number;
   private readonly maxSpeed: number;
   private readonly trackWidth: number;
@@ -84,6 +88,7 @@ export class WorldModel {
     startPose: RobotPose = DEFAULT_START_POSE,
     obstacles: Obstacle[] = [],
     shape: RobotShape = defaultRobotShape(),
+    goal: GoalArea | null = null,
   ) {
     this.minX = -config.width / 2;
     this.maxX = config.width / 2;
@@ -101,6 +106,8 @@ export class WorldModel {
     this.maxSpeed = config.maxSpeed;
     this.trackWidth = config.trackWidth;
     this.pose = { ...startPose };
+    // Copy like obstacles/shape so callers can't mutate our goal afterwards.
+    this.goal = goal === null ? null : { ...goal };
   }
 
   // Apply one tick of differential-drive motion with the given motor powers.
@@ -203,6 +210,21 @@ export class WorldModel {
     }
     return nearest;
   }
+
+  // True when the robot's centre point lies inside the goal rectangle. Edges
+  // count as inside. Heading and physical footprint are deliberately ignored:
+  // in-goal is a pure centre-point containment test. Always false when the
+  // world declares no goal.
+  isInGoal(pose: RobotPose = this.pose): boolean {
+    const goal = this.goal;
+    if (goal === null) return false;
+    return (
+      pose.x >= goal.x - goal.width / 2 &&
+      pose.x <= goal.x + goal.width / 2 &&
+      pose.y >= goal.y - goal.height / 2 &&
+      pose.y <= goal.y + goal.height / 2
+    );
+  }
 }
 
 // Ray (half-line) vs axis-aligned box intersection using the slab method.
@@ -295,6 +317,7 @@ export interface LoadedWorld {
   config: WorldConfig;
   startPose: RobotPose;
   obstacles: Obstacle[];
+  goal: GoalArea | null;
 }
 
 // Parse and validate the contents of a world JSON file (see
@@ -304,9 +327,11 @@ export interface LoadedWorld {
 // Width/height build a WorldConfig that keeps every other field from
 // DEFAULT_WORLD_CONFIG. Obstacles are parsed before the robot pose so the
 // start pose can be validated against them. A missing or empty obstacles list
-// yields an empty world. Throws with the file path in the message on any
-// invalid input — callers (e.g. the server entry point) are expected to catch
-// and fall back to defaults rather than crash.
+// yields an empty world. An optional top-level goal is parsed as a centre-based
+// box with positive extents, using the same convention as an obstacle; absent
+// or null means the world has no goal. Throws with the file path in the message
+// on any invalid input — callers (e.g. the server entry point) are expected to
+// catch and fall back to defaults rather than crash.
 export function parseWorld(
   raw: string,
   filePath: string,
@@ -355,6 +380,25 @@ export function parseWorld(
     }
   }
 
+  const rawGoal = (parsed as { goal: unknown }).goal;
+  let goal: GoalArea | null = null;
+  if (rawGoal !== undefined && rawGoal !== null) {
+    if (
+      !isObject(rawGoal) ||
+      !isFiniteNumber(rawGoal.x) ||
+      !isFiniteNumber(rawGoal.y) ||
+      !isFiniteNumber(rawGoal.width) ||
+      !isFiniteNumber(rawGoal.height) ||
+      rawGoal.width <= 0 ||
+      rawGoal.height <= 0
+    ) {
+      throw new Error(
+        `world file "${filePath}": goal must be { x, y, width, height } positive numbers`,
+      );
+    }
+    goal = { x: rawGoal.x, y: rawGoal.y, width: rawGoal.width, height: rawGoal.height };
+  }
+
   const robot = (parsed as { robot: unknown }).robot;
   if (
     !isObject(robot) ||
@@ -391,7 +435,7 @@ export function parseWorld(
     }
   }
 
-  return { config, startPose, obstacles };
+  return { config, startPose, obstacles, goal };
 }
 
 // Read and validate a world JSON file (see specs/WORLD_FORMAT.md iteration 2).

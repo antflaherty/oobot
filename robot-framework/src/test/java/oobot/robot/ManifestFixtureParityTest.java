@@ -83,7 +83,10 @@ class ManifestFixtureParityTest {
             RobotDescription description = assertDoesNotThrow(
                     () -> RobotDescription.load(path),
                     fixture.file() + " must be accepted");
-            assertEquals(4, description.components().size(), fixture.file());
+            // The updated default fixture adds a tool and a goal sensor; the
+            // older fixtures keep the original four components.
+            int expected = fixture.file().equals("valid-default.json") ? 6 : 4;
+            assertEquals(expected, description.components().size(), fixture.file());
 
             if (fixture.file().equals("valid-default.json")) {
                 assertEquals(0.5, trackWidth(description), 1e-9);

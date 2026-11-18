@@ -5,10 +5,10 @@ import org.slf4j.LoggerFactory;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Sensor;
 
 /**
- * Example robot behaviour: wall avoidance using {@link ProximitySensor#distance()}.
+ * Example robot behaviour: wall avoidance using {@link Sensor#value()}.
  * <p>
  * Reads the front-facing proximity sensor each {@code ~20 Hz} update and
  * reacts to the nearest hit ahead (obstacle or world box edge):
@@ -18,7 +18,7 @@ import oobot.robot.student.ProximitySensor;
  *   <li>otherwise: {@link Mover#forward()}.</li>
  * </ul>
  * <p>
- * {@code ProximitySensor.distance()} returns {@link Double#POSITIVE_INFINITY} when
+ * {@code Sensor.value()} returns {@link Double#POSITIVE_INFINITY} when
  * nothing is detected (or when not connected), so in an empty world with no
  * obstacles the robot drives forward until it nears a box edge.
  * <p>
@@ -33,10 +33,10 @@ public class WallAvoidBehaviour implements RobotBehaviour {
     private static final double THRESHOLD = 50.0;
 
     private final Mover mover;
-    private final ProximitySensor front;
-    private final ProximitySensor right;
+    private final Sensor<Double> front;
+    private final Sensor<Double> right;
 
-    public WallAvoidBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
+    public WallAvoidBehaviour(Mover mover, Sensor<Double> front, Sensor<Double> right) {
         this.mover = mover;
         this.front = front;
         this.right = right;
@@ -50,7 +50,7 @@ public class WallAvoidBehaviour implements RobotBehaviour {
 
     @Override
     public void update() {
-        double distance = front.distance();
+        double distance = front.value();
 
         if (distance < THRESHOLD) {
             // Something ahead (wall/obstacle): stop, then turn right to avoid it.

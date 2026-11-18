@@ -12,6 +12,7 @@ const HOST = '127.0.0.1';
 const SIM_START_TIMEOUT_MS = 30_000;
 const CONNECT_TIMEOUT_MS = 3_000;
 const RETRY_INTERVAL_MS = 500;
+const DEFAULT_BEHAVIOUR = 'wall-follow-right';
 
 const processes = [];
 let shuttingDown = false;
@@ -167,6 +168,7 @@ function waitForPort(port, host, failure) {
 async function main() {
   const robotPort = readPort('ROBOT_PORT', 8080);
   readPort('VISUALISER_PORT', 8081); // validate here too; sim validates independently
+  const behaviour = process.env.ROBOT_BEHAVIOUR || DEFAULT_BEHAVIOUR;
 
   // 1. Start the sim server first (slowest to start due to ts-node compilation)
   const { failure: simFailure } = spawnCmd(
@@ -198,7 +200,7 @@ async function main() {
       '--port',
       String(robotPort),
       '--behaviour',
-      'wall-follow-right',
+      behaviour,
       '--robot',
       robotManifest,
     ],

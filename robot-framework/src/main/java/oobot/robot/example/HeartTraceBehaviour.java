@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Sensor;
 
 /**
  * Example robot behaviour: heart trace.
@@ -24,10 +24,10 @@ import oobot.robot.student.ProximitySensor;
  * (~4.5 deg per turn tick at full differential). Only {@link Mover} commands
  * are used — no motor power values leak into behaviour code.
  * <p>
- * Reads the fixed-id {@link ProximitySensor} exposed by
+ * Reads the fixed-id {@link Sensor} exposed by
  * {@link oobot.robot.student.Brain} each tick (backed by {@code componentSnapshot})
  * to exercise the sensor path; the reading is a staleness placeholder
- * ({@link ProximitySensor#latestSimTick()}) and does not influence movement.
+ * ({@link Sensor#latestSimTick()}) and does not influence movement.
  */
 public class HeartTraceBehaviour implements RobotBehaviour {
     private static final Logger log = LoggerFactory.getLogger(HeartTraceBehaviour.class);
@@ -57,10 +57,10 @@ public class HeartTraceBehaviour implements RobotBehaviour {
     private State state = State.TURN;
 
     private final Mover mover;
-    private final ProximitySensor front;
-    private final ProximitySensor right;
+    private final Sensor<Double> front;
+    private final Sensor<Double> right;
 
-    public HeartTraceBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
+    public HeartTraceBehaviour(Mover mover, Sensor<Double> front, Sensor<Double> right) {
         this.mover = mover;
         this.front = front;
         this.right = right;

@@ -5,7 +5,8 @@ import org.slf4j.LoggerFactory;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Sensor;
+import oobot.robot.student.Tool;
 
 /**
  * Example robot behaviour: follow the right wall using two proximity sensors.
@@ -53,6 +54,11 @@ import oobot.robot.student.ProximitySensor;
  * an obstacle. Turning at 130 units instead of 50 also leaves room to climb
  * around obstacles that reach the wall being followed.
  * Sensor rays are unchanged — they still originate at the robot centre.
+ * <p>
+ * The injected {@link Tool} follows the state actually reached each update: it
+ * is active in {@code APPROACH}, {@code DRIVE} and {@code TURN_RIGHT_AT_END},
+ * and inactive in {@code SEARCH}, {@code AVOID}, {@code RECOVER_BACKUP} and
+ * {@code RECOVER_TURN}.
  * <p>
  * Commands {@link Mover} only: no motor power values are visible here — the
  * {@link oobot.robot.example.WheeledMover} implementation handles the
@@ -162,17 +168,26 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
     private boolean correctionRight;
 
     private final Mover mover;
-    private final ProximitySensor front;
-    private final ProximitySensor right;
+    private final Sensor<Double> front;
+    private final Sensor<Double> right;
+    private final Tool tool;
 
-    public WallFollowRightBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
+    /** Backwards-compatible constructor for brains with {@link Tool#NOOP}. */
+    public WallFollowRightBehaviour(Mover mover, Sensor<Double> front, Sensor<Double> right) {
+        this(mover, front, right, Tool.NOOP);
+    }
+
+    public WallFollowRightBehaviour(Mover mover, Sensor<Double> front, Sensor<Double> right,
+                                    Tool tool) {
         this.mover = mover;
         this.front = front;
         this.right = right;
+        this.tool = tool;
     }
 
     @Override
     public void init() {
+        tool.deactivate();
         mover.stop();
         state = State.SEARCH;
         turnEndTicks = 0;
@@ -199,8 +214,19 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
 
     @Override
     public void update() {
-        double frontDistance = this.front.distance();
-        double rightDistance = this.right.distance();
+        try {
+            updateState();
+        } finally {
+            // Always reflect the state actually reached, including early
+            // returns and exceptions from the state machine.
+            applyToolState();
+        }
+    }
+
+    /** The state machine body; its final {@link #state} drives the tool. */
+    private void updateState() {
+        double frontDistance = this.front.value();
+        double rightDistance = this.right.value();
         long tick = this.right.latestSimTick();
 
         trackStall(frontDistance, rightDistance, tick);
@@ -327,6 +353,19 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
 
         // 5. DRIVE: advance along the wall, keeping heading parallel.
         driveAlongWall(rightDistance, tick);
+    }
+
+    /** Set the tool from the CURRENT final state of this update. */
+    private void applyToolState() {
+        boolean active = switch (state) {
+            case APPROACH, DRIVE, TURN_RIGHT_AT_END -> true;
+            case SEARCH, AVOID, RECOVER_BACKUP, RECOVER_TURN -> false;
+        };
+        if (active) {
+            tool.activate();
+        } else {
+            tool.deactivate();
+        }
     }
 
     private enum Motion { FORWARD, STOP, TURN_LEFT, TURN_RIGHT }

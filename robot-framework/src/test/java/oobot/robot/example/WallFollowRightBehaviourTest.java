@@ -1,6 +1,7 @@
 package oobot.robot.example;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.util.ArrayList;
@@ -9,7 +10,8 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import oobot.robot.student.Mover;
-import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Sensor;
+import oobot.robot.student.Tool;
 
 /**
  * Behaviour-level tests: no sim, no sockets. Fake sensors let us feed exact
@@ -33,7 +35,7 @@ class WallFollowRightBehaviourTest {
         void clear() { commands.clear(); }
     }
 
-    private static final class FakeSensor implements ProximitySensor {
+    private static final class FakeSensor implements Sensor<Double> {
         private final String id;
         private double distance = Double.POSITIVE_INFINITY;
         private long tick;
@@ -47,7 +49,18 @@ class WallFollowRightBehaviourTest {
 
         @Override public String id() { return id; }
         @Override public long latestSimTick() { return tick; }
-        @Override public double distance() { return distance; }
+        @Override public Double value() { return distance; }
+    }
+
+    /** Records the tool state set at the end of each update. */
+    private static final class RecordingTool implements Tool {
+        private boolean active;
+
+        @Override public String id() { return "front-light"; }
+        @Override public void activate() { active = true; }
+        @Override public void deactivate() { active = false; }
+
+        boolean active() { return active; }
     }
 
     /** Drives the behaviour out of SEARCH into DRIVE at the target offset. */
@@ -55,8 +68,9 @@ class WallFollowRightBehaviourTest {
         final RecordingMover mover = new RecordingMover();
         final FakeSensor front = new FakeSensor("front-sensor");
         final FakeSensor right = new FakeSensor("right-sensor");
+        final RecordingTool tool = new RecordingTool();
         final WallFollowRightBehaviour behaviour =
-                new WallFollowRightBehaviour(mover, front, right);
+                new WallFollowRightBehaviour(mover, front, right, tool);
         long tick = 3;
 
         Harness() {
@@ -200,5 +214,75 @@ class WallFollowRightBehaviourTest {
 
         h.step(300.0, 55.0);
         assertEquals(List.of(Command.FORWARD), h.mover.commands);
+    }
+
+    @Test
+    void toolFollowsFinalStateThroughDriveAndAvoid() {
+        Harness h = new Harness();
+        assertTrue(h.tool.active(), "DRIVE should light the tool");
+
+        h.step(120.0, 55.0);
+        assertFalse(h.tool.active(), "AVOID should darken the tool");
+
+        for (int i = 0; i < 3; i++) {
+            h.step(131.0, 55.0);
+            assertFalse(h.tool.active(), "still AVOID");
+        }
+        h.step(131.0, 55.0); // fourth clear tick exits AVOID on an early return
+        assertTrue(h.tool.active(), "back in DRIVE");
+    }
+
+    @Test
+    void toolIsInactiveInSearchAndActiveInApproach() {
+        RecordingMover mover = new RecordingMover();
+        FakeSensor front = new FakeSensor("front-sensor");
+        FakeSensor right = new FakeSensor("right-sensor");
+        RecordingTool tool = new RecordingTool();
+        WallFollowRightBehaviour behaviour = new WallFollowRightBehaviour(mover, front, right, tool);
+
+        behaviour.init();
+        assertFalse(tool.active(), "init must deactivate the tool");
+
+        front.set(300.0, 3);
+        right.set(300.0, 3);
+        behaviour.update();
+        assertFalse(tool.active(), "SEARCH should darken the tool");
+
+        front.set(299.0, 6);
+        right.set(80.0, 6);
+        behaviour.update();
+        assertTrue(tool.active(), "APPROACH should light the tool");
+    }
+
+    @Test
+    void toolIsActiveAtWallEnd() {
+        Harness h = new Harness();
+        h.step(299.0, 55.0);
+        h.step(298.0, 55.0);
+        h.step(297.0, 200.0); // wall vanished -> TURN_RIGHT_AT_END
+        assertTrue(h.tool.active());
+    }
+
+    @Test
+    void toolIsInactiveDuringStallRecovery() {
+        Harness h = new Harness();
+        for (int i = 0; i < 4; i++) {
+            h.step(300.0, 55.0);
+        }
+        assertFalse(h.tool.active(), "RECOVER_BACKUP should darken the tool");
+        for (int i = 0; i < 6; i++) {
+            h.step(300.0, 55.0);
+        }
+        assertFalse(h.tool.active(), "RECOVER_TURN should darken the tool");
+    }
+
+    @Test
+    void initDeactivatesAnActiveTool() {
+        Harness h = new Harness();
+        assertTrue(h.tool.active(), "DRIVE should light the tool");
+
+        h.behaviour.init();
+
+        assertFalse(h.tool.active());
     }
 }
