@@ -6,7 +6,9 @@ import {
   FRONT_LIGHT_ID,
   frontLightCircle,
   frontLightFill,
+  goalRect,
   isFrontLightActive,
+  Renderer,
   robotWheelRects,
 } from '../src/renderer';
 import type { WheelRect } from '../src/renderer';
@@ -98,4 +100,63 @@ test('isFrontLightActive only trusts an active front-light tool state', () => {
     ]),
     true,
   );
+});
+
+test('goalRect maps the world goal centre and full extents into canvas pixels', () => {
+  // Default world goal: centre (-220, -240), 80x80 world units.
+  assert.deepEqual(goalRect({ x: -220, y: -240, width: 80, height: 80 }), {
+    x: 140,
+    y: 500,
+    width: 80,
+    height: 80,
+  });
+});
+
+test('goalRect flips world +Y while preserving the goal size', () => {
+  assert.deepEqual(goalRect({ x: 100, y: 50, width: 20, height: 60 }), {
+    x: 490,
+    y: 220,
+    width: 20,
+    height: 60,
+  });
+});
+
+// Minimal 2D context stub so drawGoal can be exercised under node:test.
+class GoalContextStub {
+  fillStyle = '';
+  strokeStyle = '';
+  lineWidth = 0;
+  readonly fills: Array<[number, number, number, number]> = [];
+  readonly strokes: Array<[number, number, number, number]> = [];
+
+  save(): void {}
+  restore(): void {}
+  fillRect(x: number, y: number, w: number, h: number): void {
+    this.fills.push([x, y, w, h]);
+  }
+  strokeRect(x: number, y: number, w: number, h: number): void {
+    this.strokes.push([x, y, w, h]);
+  }
+}
+
+function rendererWith(ctx: GoalContextStub): Renderer {
+  const canvas = {
+    width: 0,
+    height: 0,
+    getContext: () => ctx,
+  } as unknown as HTMLCanvasElement;
+  return new Renderer(canvas);
+}
+
+test('drawGoal skips null and fills/strokes the mapped rectangle otherwise', () => {
+  const ctx = new GoalContextStub();
+  const renderer = rendererWith(ctx);
+
+  renderer.drawGoal(null);
+  assert.deepEqual(ctx.fills, []);
+  assert.deepEqual(ctx.strokes, []);
+
+  renderer.drawGoal({ x: -220, y: -240, width: 80, height: 80 });
+  assert.deepEqual(ctx.fills, [[140, 500, 80, 80]]);
+  assert.deepEqual(ctx.strokes, [[140, 500, 80, 80]]);
 });

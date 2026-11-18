@@ -1,26 +1,18 @@
 package oobot.robot.bridge.sim;
 
-import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Sensor;
 
 /**
- * Sim-backed implementation of {@link ProximitySensor}. One instance per
+ * Sim-backed implementation of {@link Sensor}{@code <Double>}. One instance per
  * proximity sensor, identified by its component id. Receives {@code
  * componentSnapshot} updates from the bridge (via {@link SimRobot}) and exposes
  * the latest reading.
  * <p>
  * This class holds no reference to the bridge: all updates arrive through
- * {@link #update(long, Double)}.
+ * {@link #update(long, Double)}. The staleness threshold is inherited from
+ * {@link Sensor#MAX_STALE_TICKS}.
  */
-class SimProximitySensor implements ProximitySensor {
-    /**
-     * Maximum age, in sim ticks, that behaviour code should accept for a sensor
-     * reading before treating it as stale. At the sim's ~60 Hz this is roughly
-     * half a second — comfortably more than the ~3 sim ticks between two
-     * behaviour updates, but short enough to notice a stalled snapshot stream.
-     * See {@link #latestSimTick()} for the comparison behaviour code should use.
-     */
-    static final long MAX_STALE_TICKS = 30L;
-
+class SimProximitySensor implements Sensor<Double> {
     private final String id;
     private volatile long lastSimTick = 0L;
     private volatile Double value = null;
@@ -43,30 +35,39 @@ class SimProximitySensor implements ProximitySensor {
      * sensor data by comparing this value with the newest sim tick it has
      * observed (for example, one obtained from another sensor or tracked across
      * its own update loop). A reading is stale when
-     * {@code currentTick - latestSimTick() > MAX_STALE_TICKS}; the sim bridge
-     * keeps this constant at {@value #MAX_STALE_TICKS} ticks. Stale readings
-     * should be ignored even though {@link #distance()} still returns their
-     * last numeric value. On a fresh session (reconnect or tick rollback) the
-     * bridge resets both the tick and the value, so {@code latestSimTick()}
-     * returns {@code 0} and {@code distance()} returns infinity.
+     * {@code currentTick - latestSimTick() > Sensor.MAX_STALE_TICKS}; the sim
+     * bridge uses the inherited {@link Sensor#MAX_STALE_TICKS} constant. Stale
+     * readings should be ignored even though {@link #value()} still returns
+     * their last numeric value. On a fresh session (reconnect or tick rollback)
+     * the bridge resets both the tick and the value, so {@code latestSimTick()}
+     * returns {@code 0} and {@code value()} returns infinity.
      */
     @Override
     public long latestSimTick() {
         return lastSimTick;
     }
 
+    /** The latest distance reading, never {@code null}: {@code +Infinity} if none. */
     @Override
-    public double distance() {
+    public Double value() {
         return value == null ? Double.POSITIVE_INFINITY : value;
     }
 
     /**
-     * Whether the newest reading is more than {@link #MAX_STALE_TICKS} sim ticks
-     * behind {@code currentSimTick}. Package-private: behaviour code uses the
-     * public {@link #latestSimTick()} value and the policy documented there.
+     * Package-private alias retained for sim-package callers still using the
+     * old name; new code should use {@link #value()}.
+     */
+    double distance() {
+        return value();
+    }
+
+    /**
+     * Whether the newest reading is more than {@link Sensor#MAX_STALE_TICKS} sim
+     * ticks behind {@code currentSimTick}. Package-private: behaviour code uses
+     * the public {@link #latestSimTick()} value and the policy documented there.
      */
     boolean isStale(long currentSimTick) {
-        return currentSimTick - lastSimTick > MAX_STALE_TICKS;
+        return currentSimTick - lastSimTick > Sensor.MAX_STALE_TICKS;
     }
 
     /** Called by the bridge when a componentSnapshot arrives. */

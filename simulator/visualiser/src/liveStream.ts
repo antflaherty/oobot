@@ -11,7 +11,7 @@
 // `new LiveStream()` in main.ts keeps working unchanged.
 // ---------------------------------------------------------------------------
 
-import type { WorldSnapshot, RobotPose, Obstacle, RobotShape, ToolState } from './types';
+import type { WorldSnapshot, RobotPose, Obstacle, RobotShape, ToolState, GoalArea } from './types';
 import { angleLerp, clamp01, lerp } from './math';
 
 const VISUALISER_PORT = 8081;
@@ -92,6 +92,27 @@ function parseToolStates(value: unknown): ToolState[] {
   return result;
 }
 
+/** Defensively narrow the optional wire goal area. Absent, null or malformed
+ * data yields null, meaning "no goal drawn". Extra keys are ignored. */
+function parseGoal(value: unknown): GoalArea | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return null;
+  const goal = value as {
+    x?: unknown;
+    y?: unknown;
+    width?: unknown;
+    height?: unknown;
+  };
+  if (
+    !isFiniteNumber(goal.x) ||
+    !isFiniteNumber(goal.y) ||
+    !isFiniteNumber(goal.width) ||
+    !isFiniteNumber(goal.height)
+  ) {
+    return null;
+  }
+  return value as GoalArea;
+}
+
 /** Narrow a parsed NDJSON line to a snapshot whose fields are safe to render. */
 function isValidSnapshot(value: unknown): value is WorldSnapshot {
   if (typeof value !== 'object' || value === null) return false;
@@ -121,6 +142,7 @@ export class LiveStream {
   private latestObstacles: Obstacle[] = [];
   private latestRobotShape: RobotShape | null = null;
   private latestToolStates: ToolState[] = [];
+  private latestGoal: GoalArea | null = null;
   private onTrailPoint: ((x: number, y: number) => void) | null = null;
   private onTrailReset: (() => void) | null = null;
 
@@ -190,6 +212,11 @@ export class LiveStream {
     return this.latestToolStates;
   }
 
+  /** Returns the latest goal area, or null when absent/malformed. */
+  getGoal(): GoalArea | null {
+    return this.latestGoal;
+  }
+
   /** True only when the given tool id is currently reported active. */
   isToolActive(id: string): boolean {
     return this.latestToolStates.some((tool) => tool.id === id && tool.active);
@@ -219,6 +246,7 @@ export class LiveStream {
     this.latestObstacles = [];
     this.latestRobotShape = null;
     this.latestToolStates = [];
+    this.latestGoal = null;
     this.lineBuffer = '';
     this.onTrailReset?.();
   }
@@ -371,6 +399,9 @@ export class LiveStream {
     // clears the cache, so an older/newer sim that stops publishing a tool
     // cannot leave a stale indicator lit.
     this.latestToolStates = parseToolStates(snapshot.payload.robot.toolStates);
+    // Goal is optional on the wire: absent, null or malformed clears the cache
+    // so an older/newer sim cannot leave a stale goal rectangle on screen.
+    this.latestGoal = parseGoal(snapshot.payload.goal);
 
     // Record the trail point from the authoritative snapshot stream so the
     // path keeps tracing even while requestAnimationFrame is paused (tab hidden).

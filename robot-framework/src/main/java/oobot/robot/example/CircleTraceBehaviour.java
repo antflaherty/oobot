@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Sensor;
 
 /**
  * Example robot behaviour: circle trace.
@@ -21,10 +21,10 @@ import oobot.robot.student.ProximitySensor;
  * implementation handles the per-wheel translation. This is the decoupling
  * boundary in action.
  * <p>
- * Reads the fixed-id {@link ProximitySensor} exposed by
+ * Reads the fixed-id {@link Sensor} exposed by
  * {@link oobot.robot.student.Brain} each tick (backed by {@code componentSnapshot})
  * to exercise the sensor path; the reading is a staleness placeholder
- * ({@link ProximitySensor#latestSimTick()}) and does not influence movement.
+ * ({@link Sensor#latestSimTick()}) and does not influence movement.
  */
 public class CircleTraceBehaviour implements RobotBehaviour {
     private static final Logger log = LoggerFactory.getLogger(CircleTraceBehaviour.class);
@@ -36,10 +36,10 @@ public class CircleTraceBehaviour implements RobotBehaviour {
     private static final int TICKS_PER_TURN = 2;    // ~100 ms at 20 Hz (~9 degrees per turn)
 
     private final Mover mover;
-    private final ProximitySensor front;
-    private final ProximitySensor right;
+    private final Sensor<Double> front;
+    private final Sensor<Double> right;
 
-    public CircleTraceBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
+    public CircleTraceBehaviour(Mover mover, Sensor<Double> front, Sensor<Double> right) {
         this.mover = mover;
         this.front = front;
         this.right = right;

@@ -46,11 +46,11 @@ class RobotDescriptionTest {
     }
 
     @Test
-    void loadsDefaultManifestWithFiveComponentsIncludingTool() {
+    void loadsDefaultManifestWithSixComponentsIncludingToolAndGoalSensor() {
         RobotDescription description = RobotDescription.load(defaultManifest());
 
         List<ComponentDescription> components = description.components();
-        assertEquals(5, components.size());
+        assertEquals(6, components.size());
         assertTrue(components.stream().anyMatch(c ->
                 c.id().equals("left-wheel") && c.type() == ComponentType.WHEEL));
         assertTrue(components.stream().anyMatch(c ->
@@ -65,6 +65,22 @@ class RobotDescriptionTest {
         assertEquals(ComponentType.TOOL, tool.type());
         assertEquals(0.0, tool.angle(), 1e-9);
         assertEquals(0.0, tool.offset(), 1e-9);
+    }
+
+    @Test
+    void defaultManifestKeepsFrontLightAtIndexFourAndAppendsGoalSensorAtIndexFive() {
+        RobotDescription description = RobotDescription.load(defaultManifest());
+
+        List<ComponentDescription> components = description.components();
+        assertEquals(6, components.size());
+        assertEquals("front-light", components.get(4).id());
+        assertEquals(ComponentType.TOOL, components.get(4).type());
+
+        ComponentDescription goalSensor = components.get(5);
+        assertEquals("goal-sensor", goalSensor.id());
+        assertEquals(ComponentType.GOAL_SENSOR, goalSensor.type());
+        assertEquals(0.0, goalSensor.angle(), 1e-9);
+        assertEquals(0.0, goalSensor.offset(), 1e-9);
     }
 
     @Test

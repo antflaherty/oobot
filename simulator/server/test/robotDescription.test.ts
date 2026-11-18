@@ -36,7 +36,7 @@ interface FixtureCase {
 }
 
 const cases: FixtureCase[] = [
-  { file: "valid-default.json", accept: true, components: 5, trackWidth: 0.5 },
+  { file: "valid-default.json", accept: true, components: 6, trackWidth: 0.5 },
   {
     file: "accept-body.json",
     accept: true,
@@ -229,4 +229,38 @@ test("tool: registry keeps tools separate from wheels and sensors in manifest or
     ["left-wheel", "right-wheel"],
   );
   assert.equal(registry.get("front-light").type, "tool");
+});
+
+test("default manifest keeps front-light at index 4 and appends goal-sensor at index 5", () => {
+  const description = loadRobotDescription(join(FIXTURES, "valid-default.json"));
+
+  assert.equal(description.components.length, 6, "component count");
+  assert.deepEqual(description.components[4], {
+    id: "front-light",
+    type: "tool",
+    angle: 0.0,
+    offset: 0,
+  });
+  assert.deepEqual(description.components[5], {
+    id: "goal-sensor",
+    type: "goalSensor",
+    angle: 0.0,
+    offset: 0,
+  });
+});
+
+test("registry keeps goal sensors separate from proximity sensors", () => {
+  const description: RobotDescription = loadRobotDescription(
+    join(FIXTURES, "valid-default.json"),
+  );
+  const registry = new ComponentRegistry(description);
+
+  assert.deepEqual(
+    registry.sensors().map((c) => c.id),
+    ["front-sensor", "right-sensor"],
+  );
+  assert.deepEqual(
+    registry.goalSensors().map((c) => c.id),
+    ["goal-sensor"],
+  );
 });

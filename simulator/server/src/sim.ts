@@ -9,7 +9,7 @@
 // Wires into the encapsulated Transport interface (specs/COMMS.md §2). The
 // concrete WebSocketTransport is constructed in index.ts.
 
-import { Obstacle, Transport, RobotPose } from "./types";
+import { GoalArea, Obstacle, Transport, RobotPose } from "./types";
 import {
   Channel,
   Handlers,
@@ -101,6 +101,10 @@ export class SimEngine {
   private readonly registry: ComponentRegistry;
   private readonly shape: RobotShape;
 
+  // Goal area from the world file (null when the world declares none). It is
+  // published on every worldSnapshot and drives all goal-sensor readings.
+  private readonly goal: GoalArea | null;
+
   // Authoritative logical clock — incremented once per sim step.
   private simTick = 0;
 
@@ -110,9 +114,9 @@ export class SimEngine {
   // robot.
   private latestCommand: WheelLevels = { left: 0, right: 0 };
 
-  // Single-slot component sensor state: one reading per declared proximity
-  // sensor, overwritten each tick (no queue). A value is null when nothing is
-  // detected along that sensor's declared ray.
+  // Single-slot component sensor state: one reading per declared proximity and
+  // goal sensor, overwritten each tick (no queue). Null means "nothing
+  // detected" for proximity sensors and "no world goal" for goal sensors.
   private latestReadings: ComponentReading[] = [];
 
   // Authoritative tool state, keyed by component id. Initialised false for
@@ -146,8 +150,10 @@ export class SimEngine {
     worldConfig?: WorldConfig,
     startPose: RobotPose = DEFAULT_START_POSE,
     obstacles: Obstacle[] = [],
+    goal: GoalArea | null = null,
   ) {
     this.transport = transport;
+    this.goal = goal;
     this.registry = new ComponentRegistry(description);
     for (const tool of this.registry.tools()) {
       this.toolStates.set(tool.id, false);
@@ -158,6 +164,7 @@ export class SimEngine {
       startPose,
       obstacles,
       this.shape,
+      goal,
     );
   }
 
@@ -233,6 +240,7 @@ export class SimEngine {
     }
     this.stopMotors();
     this.clearToolStates();
+    this.invalidateGoalDerivedState();
     log("simulation stopped");
   }
 
@@ -241,6 +249,18 @@ export class SimEngine {
   private resetRobotCommandState(): void {
     this.lastAppliedSeq = -1;
     this.lastSeenTick = null;
+    this.invalidateGoalDerivedState();
+  }
+
+  // Goal readings are derived from the live pose and the world goal. They are
+  // rebuilt every tick (nothing is latched), but drop any published goal
+  // readings on reset paths so a new robot slot or a restarted sim cannot see
+  // a value produced for an earlier controller before the next tick.
+  private invalidateGoalDerivedState(): void {
+    const goalSensors = this.registry.goalSensors();
+    if (goalSensors.length === 0) return;
+    const goalIds = new Set(goalSensors.map((component) => component.id));
+    this.latestReadings = this.latestReadings.filter((reading) => !goalIds.has(reading.id));
   }
 
   private handleComponentCommand(connectionId: string, envelope: IncomingEnvelope): void {
@@ -316,6 +336,14 @@ export class SimEngine {
           continue;
         }
         this.toolStates.set(component.id, command.value === 1);
+        continue;
+      }
+
+      if (component.type === "goalSensor") {
+        // Goal sensors are read-only: the sim derives their value from the
+        // world goal and the robot pose, never from an inbound command.
+        this.counters.commandsIgnored++;
+        log(`ignoring command for read-only goal sensor "${command.id}" (tick ${this.simTick})`);
         continue;
       }
 
@@ -422,16 +450,25 @@ export class SimEngine {
 
     // 2. Every declared proximity sensor casts from the robot centre along
     //    pose.heading + its own declared angle. Take the nearest hit against
-    //    box edges and obstacles; single-slot, overwritten each tick.
+    //    box edges and obstacles; single-slot, overwritten each tick. Goal
+    //    sensors are read-only and report 1 when the robot centre is inside
+    //    the goal, 0 when outside, and null when the world has no goal.
     const pose = this.world.pose;
-    this.latestReadings = this.registry.sensors().map((component) => ({
-      id: component.id,
-      value: this.nearestHit(pose.heading + component.angle),
-    }));
+    const goalReading = this.goal === null ? null : (this.world.isInGoal(pose) ? 1 : 0);
+    this.latestReadings = [
+      ...this.registry.sensors().map((component) => ({
+        id: component.id,
+        value: this.nearestHit(pose.heading + component.angle),
+      })),
+      ...this.registry.goalSensors().map((component) => ({
+        id: component.id,
+        value: goalReading,
+      })),
+    ];
 
     // 3. Publish one componentSnapshot to the robot channel every tick.
     //    Single-slot (no queue); payload carries one reading per declared
-    //    proximity sensor (null when nothing is detected on that ray).
+    //    proximity and goal sensor (null when nothing is detected/no goal).
     const snapshotPayload: ComponentSnapshotPayload = { readings: this.latestReadings };
     const snapshotEnvelope: OutgoingEnvelope = {
       type: "componentSnapshot",
@@ -458,6 +495,8 @@ export class SimEngine {
       payload: {
         robot: { ...this.world.pose, shape: this.shape, toolStates },
         obstacles: this.world.obstacles,
+        // Always present: null means the world declared no goal.
+        goal: this.goal,
       },
     };
     this.transport.broadcast("visualiser", worldEnvelope);

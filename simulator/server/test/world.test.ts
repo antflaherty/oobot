@@ -430,3 +430,73 @@ test("obstacles are validated before the start pose", () => {
   const message = validationError(raw);
   assert.ok(message.includes("each obstacle must"), `obstacle error wins: ${message}`);
 });
+
+// --- Goal area -----------------------------------------------------------
+
+const GOAL = { x: -220, y: -240, width: 80, height: 80 };
+
+function goalWorldJson(goal: unknown): string {
+  return JSON.stringify({
+    width: 800,
+    height: 600,
+    robot: { x: 0, y: 0, heading: 0 },
+    obstacles: [],
+    goal,
+  });
+}
+
+test("world loader reports no goal when the file omits it", () => {
+  const loaded = parseWorld(worldJson({ x: 0, y: 0, heading: 0 }), WORLD_PATH);
+  assert.equal(loaded.goal, null);
+});
+
+test("world loader treats an explicit null goal as no goal", () => {
+  const loaded = parseWorld(goalWorldJson(null), WORLD_PATH);
+  assert.equal(loaded.goal, null);
+});
+
+test("world loader parses a valid centre-based goal area", () => {
+  const loaded = parseWorld(goalWorldJson(GOAL), WORLD_PATH);
+  assert.deepEqual(loaded.goal, GOAL);
+});
+
+test("world loader rejects malformed goals", () => {
+  const invalidGoals: unknown[] = [
+    42,
+    "goal",
+    [],
+    { x: 0, y: 0, width: 80 },
+    { x: 0, y: 0, width: 0, height: 80 },
+    { x: 0, y: 0, width: 80, height: -1 },
+    { x: 0, y: 0, width: "80", height: 80 },
+  ];
+  for (const goal of invalidGoals) {
+    const message = validationError(goalWorldJson(goal));
+    assert.ok(message.includes(WORLD_PATH), `error names the world file: ${message}`);
+    assert.ok(message.includes("goal must"), `error explains the problem: ${message}`);
+  }
+});
+
+test("WorldModel tests goal containment using only the robot centre", () => {
+  const world = new WorldModel(DEFAULT_WORLD_CONFIG, { x: 0, y: 0, heading: 0 }, [], undefined, GOAL);
+  assert.deepEqual(world.goal, GOAL);
+
+  // GOAL spans x[-260,-180] and y[-280,-200]. Heading is irrelevant.
+  assert.equal(world.isInGoal({ x: -220, y: -240, heading: Math.PI }), true, "centre is inside");
+  assert.equal(world.isInGoal({ x: -260, y: -240, heading: 0 }), true, "left edge counts as inside");
+  assert.equal(world.isInGoal({ x: -220, y: -200, heading: 0 }), true, "top edge counts as inside");
+  assert.equal(world.isInGoal({ x: -180, y: -280, heading: 0 }), true, "corner counts as inside");
+  assert.equal(world.isInGoal({ x: -261, y: -240, heading: 0 }), false, "just outside X");
+  assert.equal(world.isInGoal({ x: -220, y: -199, heading: 0 }), false, "just outside Y");
+  assert.equal(world.isInGoal({ x: 0, y: 0, heading: 0 }), false, "far from the goal");
+
+  // The default pose argument reads the live pose, not a frozen snapshot.
+  world.pose = { x: -220, y: -240, heading: 0 };
+  assert.equal(world.isInGoal(), true, "defaults to the current pose");
+});
+
+test("WorldModel without a goal is never in goal", () => {
+  const world = new WorldModel();
+  assert.equal(world.goal, null);
+  assert.equal(world.isInGoal({ x: 0, y: 0, heading: 0 }), false);
+});

@@ -1,10 +1,11 @@
 # Hardening decisions (D-1 … D-6)
 
 Canonical record for the pre-feature hardening pass. Produced by task `T0.5`;
-read-only for all other tasks. Where `AGENTS.md`, root docs or specs disagree
-with this file, **this file wins** (per `HARDENING_PLAN.md`, which wins over
-`AGENTS.md`). Do not re-decide these items — report objections to the merge-gate
-owner instead.
+read-only for all other tasks. Post-hardening feature amendments are appended
+below by the documentation owner (W1-D2); D-1…D-6 and the W0 fixture set are
+never re-decided. Where `AGENTS.md`, root docs or specs disagree with this file,
+**this file wins** (per `HARDENING_PLAN.md`, which wins over `AGENTS.md`). Do not
+re-decide these items — report objections to the merge-gate owner instead.
 
 Locked source: the "Decisions locked in" table in `HARDENING_PLAN.md`. This
 file expands each decision into the exact constants, formulas and sequences
@@ -396,3 +397,76 @@ locked decision or value above is changed.
 | Accepted-tick update | `lastSeenTick = max(lastSeenTick ?? simTick, simTick)` only on acceptance |
 | `seq`/`simTick` validation | finite, non-negative integers; otherwise reject |
 | Active connection | single robot slot; reject commands from other connections/channels |
+
+---
+
+## GOAL FEATURE AMENDMENT (feature work after W0–W4; D-1…D-6 unchanged)
+
+Wave 1 adds goal-seeking without changing any locked decision above. This
+section records the agreed end state so the sim, visualiser, Java controller and
+docs agree; `AGENTS.md` and `specs/` carry the day-to-day detail.
+
+**Goal area / world.** A world file may declare an optional top-level
+`"goal": { "x": number, "y": number, "width": number, "height": number }`: a
+centre-based axis-aligned rectangle in world units, like `Obstacle`, with
+`width`/`height` as full extents. Absent means no goal; an invalid goal fails
+world loading normally. `simulator/server/worlds/maze.json` declares
+`{ "x": 340, "y": 100, "width": 80, "height": 80 }`. Only the robot
+**centre** determines in-goal; the D-1 footprint, collision and spawn rules are
+unchanged. `WorldModel` holds `goal: GoalArea | null`, exposes `isInGoal(pose)`
+and passes it to `SimEngine` as a new final argument; `LoadedWorld` carries
+`goal` and `parseWorld` validates it.
+
+**Manifest.** Both loaders accept `"type": "goalSensor"` with a required finite
+`angle`, no `offset`, no `side` (unknown keys ignored). `robots/default.json`
+and both `valid-default.json` fixtures append
+`{ "id": "goal-sensor", "type": "goalSensor", "angle": 0.0 }` after
+`front-light`, giving six components (`front-light` stays `component[4]`,
+`goal-sensor` is `component[5]`). The fixture table and the
+`type: exactly wheel | proximitySensor` row above remain the historical W0
+hardening contract: the current byte-identical fixtures also include the `body`
+block (see the earlier post-hardening amendment), `front-light` and
+`goal-sensor`. `ComponentType` gains `GOAL_SENSOR`; the TS registry exposes
+`goalSensors()` separately from proximity `sensors()`; the Java registry gains
+`booleanSensor(id)`, while `sensor(id)` now returns `Sensor<Double>`.
+
+**Wire.** `componentSnapshot.readings` gains one entry per declared
+`goalSensor`: `{ "id": "goal-sensor", "value": 1 | 0 | null }` — `1` inside the
+goal, `0` outside, `null` when the world has no goal (numeric because
+`ComponentReading.value` is `number | null`). Commands targeting `goal-sensor`
+are read-only and ignored. `worldSnapshot.payload` gains sibling
+`goal?: GoalArea | null`: the sim always emits it (`null` for no goal) and the
+visualiser treats absent/null/malformed values as "no goal drawn". The front
+light still travels on the existing tool-state path
+(`componentCommand` → `worldSnapshot.robot.toolStates` → renderer circle);
+there is no new wire field for it, and the safe-stop frame stays wheels-only.
+
+**Java student API.** `Sensor<T> extends Component` replaces `ProximitySensor`:
+`MAX_STALE_TICKS = 30L` (moved from `SimProximitySensor`), `latestSimTick()`
+(0 before the first reading / after reset) and a never-null `value()` —
+`Infinity` for `Sensor<Double>` when nothing is detected, `false` for
+`Sensor<Boolean>` when the goal reading is `null`/`0`/missing/stale. `Brain`
+exposes `Sensor<Double> frontSensor()`, `Sensor<Double> rightSensor()`,
+`Sensor<Boolean> goalSensor()` and `Tool tool()`. D-3 itself is unchanged; its
+fixed-id approach is extended to `goal-sensor`, validated at startup like
+front/right. No `GoalSensor` or `BinarySensor` interface is added. `SimRobot`
+binds both sensor types, routes readings by id into both maps and invalidates
+both maps on socket close/reconnect/rollback; tool state stays persistent and
+is resynced on reconnect.
+
+**Default behaviour.** Wave 1 originally shipped a `student/GoalSeekBehaviour`
+as the default (`--behaviour goal-seek`). That exploration behaviour has since
+been removed: `wall-follow-right` is now the default (also in `scripts/dev.js`
+and root `dev:robot`), and goal arrival lives in `DefaultBrain` for **every**
+behaviour. Each `tick()` checks the goal sensor first; a fresh `true` reading
+(`latestSimTick() > 0`) latches "arrived" — `Mover.stop()` + `Tool.activate()`
+re-asserted each tick, behaviour updates suspended. Stale/no-goal data
+(`latestSimTick() == 0`) never lights the light; `setBehaviour(...)` clears the
+latch. `Tool.NOOP` is acceptable when no tool is declared. `DefaultBrain` keeps
+its 3-arg and 4-arg constructors (constant-false goal sensor) and gains a 5-arg
+one taking the real goal sensor. `WallFollowRightBehaviour` keeps its existing
+front-light rule; `scripts/dev.js` keeps the `ROBOT_BEHAVIOUR` override.
+
+**Visualiser.** Cached goal state resets on every connect/reconnect and on a
+decreasing `simTick` (D-5). The renderer draws the goal rectangle before
+obstacles and robot; front-light rendering is unchanged.

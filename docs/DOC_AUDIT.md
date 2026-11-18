@@ -1,10 +1,11 @@
 # Documentation audit
 
-Produced by task `T0.5`; read-only for all other tasks. This is the work list
-for the W3 documentation rewrite (`D3.a`, `D3.b`, `D3.c`) and for `V1.1` where
-noted. The current code is the source of truth; this table records where docs
-disagree with it. `docs/DECISIONS.md` is the source of truth for the locked
-hardening decisions.
+Produced by task `T0.5`; read-only for all other tasks except the Wave 1
+goal-feature documentation pass, which appends a status section below. This is
+the work list for the W3 documentation rewrite (`D3.a`, `D3.b`, `D3.c`) and for
+`V1.1` where noted. The current code is the source of truth; this table records
+where docs disagreed with it at the end of the hardening pass.
+`docs/DECISIONS.md` is the source of truth for the locked hardening decisions.
 
 **Status key**
 
@@ -31,11 +32,11 @@ untouched.
 | `DESIGN_REVIEW.md` | stale | Historical review presented as current: §6.2 "no world file needed at all", §5.1 "sensors were deferred for the very first iteration", §7.2 "no sensors, no obstacles", "Suggested First Step" and "All Decisions Summary" still describe iteration-1 `motorCommand`/`sensorSnapshot` and a square-trace first robot. Must be labelled historical/superseded and cross-linked to `docs/DECISIONS.md`. | `D3.a` |
 | `PLAN.md` | abandoned | Iteration-1 implementation plan: `motorCommand`/`sensorSnapshot`, `Motor.setSpeed`, square-trace-only robot, "no obstacles", `sensorSnapshot` payload `front`/`right`. All phases marked COMPLETE against a superseded design. | `D3.c` (move to `docs/archive/` with historical header) |
 | `PLAN_SENSORS.md` | abandoned | Iteration-2 plan for a **single** front sensor via static `Sensors.distance()` and `sensorSnapshot` `{distance}`; code has id-addressed `componentSnapshot`, `ProximitySensor` and manifest-driven angles. Definition-of-done checklist and dependency graph are obsolete. | `D3.c` (move to `docs/archive/` with historical header) |
-| `AGENTS.md` | stale | "MVP" overview omits `sensor.ts`, `worlds/maze.json`, `Robots` manifest consumers' current shape, `BrownianMotionBehaviour.java`, `RobotPlatform.java`; says no test files exist; claims default behaviour `WallFollowRightBehaviour` in one place but lists `SquareTraceBehaviour` as default example; `Wheel.angle()` threshold described loosely; no mention of fixed `front-sensor`/`right-sensor` Brain constraint (D-3), safe-stop two-layer contract (D-2) or D-1 kinematics formula. | `D3.c` (**preserve user's in-flight edits**) |
+| `AGENTS.md` | current | No current contradiction: W3 resolved the earlier gaps (test files, `sensor.ts`, manifest consumers, D-1/D-2/D-3 notes), and W1-D2 added the goal feature (`Sensor<T>`, `goal-sensor`, default `goal-seek`, opt-in `wall-follow-right`, goal rectangle, front light ON at goal) while preserving tool-support docs. | none (W1-D2 goal pass) |
 | `robot-framework/MODERNISATION.md` | stale | Progress log names deleted types (`SensorSnapshotMessage`, `MotorPayload`) and old message names (`motorCommand`, `sensorSnapshot`) in "done & verified" checks; verification checklist marks network smoke tests `[x]` although no automated tests exist in W0 — must be marked manual/ad-hoc where appropriate (`X3.2` scope). | `D3.c` |
 | `HARDENING_PLAN.md` | current | No contradiction — authoritative scope, ownership and decisions for this pass. | none (do not edit) |
-| `docs/DECISIONS.md` | current | Created by `T0.5`; expands D-1..D-6, fixture set and safe-stop/stale-command rules. | none (read-only after W0) |
-| `docs/DOC_AUDIT.md` | current | Created by `T0.5`; this file. | none (read-only after W0) |
+| `docs/DECISIONS.md` | current | Created by `T0.5`; expands D-1..D-6, fixture set and safe-stop/stale-command rules. W1-D2 appended a goal-feature amendment; D-1..D-6 are unchanged. | none (read-only after W0 except amendments) |
+| `docs/DOC_AUDIT.md` | current | Created by `T0.5`; this file, plus the Wave 1 goal-doc status section below. | none (read-only after W0 except amendments) |
 | `specs/WIRE_PROTOCOL.md` | stale | §6.2 `worldSnapshot` payload lists only `robot.{x,y,heading}`, but `sim.ts` publishes `payload.obstacles`; §4–5 have no `seq`/`simTick` validation or D-4 stale-command rule; §7 documents only sim-side safe stop, not Java's zero-before-close (D-2); §10 still lists world file and obstacles as "iteration 2"; `userControl` described as deferred on a "primarily unidirectional" channel. | `D3.b` |
 | `specs/COMMS.md` | stale | Whole document speaks `motorCommand` / `sensorSnapshot` (incl. §5.1, §8.2, §9 sequence diagrams); `OnMessage` signature lacks channel, which `S1.2` must add; "sim never imports a concrete socket library" and hand-rolled pseudocode no longer describe `transport.ts`; claims `sensorSnapshot` has an empty placeholder payload; no seq ownership or stale-command rule; "different transports" rationale overstated. | `D3.b` |
 | `specs/COMPONENTS.md` | stale | Iteration-1 component spec throughout: `motorCommand` `{left,right}`, empty `sensorSnapshot` placeholder, `Motor.setSpeed`, static `Sensors`, "no obstacles in iteration 1", square-trace-only example, "one sensor" framing, no manifest, no test harnesses. | `D3.b` |
@@ -50,6 +51,34 @@ untouched.
 
 ---
 
+## Wave 1 goal-feature documentation pass
+
+The goal feature changes what several docs must say. Ownership is fixed by the
+Wave 1 contract; the table above is the historical hardening audit and is not
+rewritten here.
+
+- **Facts to document:** optional centre-based goal rectangle in the world file
+  (default `maze.json`: `{x: 340, y: 100, width: 80, height: 80}`), the
+  `goalSensor` manifest type and `goal-sensor` id, the numeric
+  `componentSnapshot` reading (`1`/`0`/`null`), `worldSnapshot.goal`, the
+  generic `Sensor<T>` student API, `wall-follow-right` as the default behaviour,
+  and the brain's front light ON when the robot centre reaches the goal (never
+  on stale/no-goal data). `goal-seek` was removed; arrival is brain-level.
+- **`W1-D2` (this pass):** `AGENTS.md`, `docs/DECISIONS.md` (goal-feature
+  amendment; D-1…D-6 unchanged) and this file. Existing tool-support
+  documentation is preserved — the front light still travels on the tool-state
+  path (`componentCommand` → `worldSnapshot.robot.toolStates` → renderer) with
+  no new wire field.
+- **`W1-D1`:** `specs/ROBOT_DESCRIPTION.md`, `WIRE_PROTOCOL.md`,
+  `COMPONENTS.md`, `WORLD_FORMAT.md`, `COMMS.md`, `ROBOT_LAUNCH.md`.
+- **`W1-D4`:** `README.md`, `robot-framework/README.md`, `ARCHITECTURE.md`,
+  `MVP.md`.
+- **Unchanged here by contract:** `FUTURE.md`, `DESIGN_REVIEW.md` and
+  `docs/archive/**` keep their historical / non-default mentions.
+  `specs/SENSORS.md`, `simulator/server/README.md` and
+  `robot-framework/MODERNISATION.md` are outside Wave 1 ownership; their rows
+  remain as the historical audit record.
+
 ## Coordination notes
 
 1. `simulator/visualiser/index.html` is owned by **`V1.1`** in the plan's File
@@ -57,7 +86,8 @@ untouched.
    `D3.*` as fixer columns; the ownership table is authoritative, so the audit
    records `V1.1` and leaves the file untouched by this task.
 2. `HARDENING_PLAN.md`, `docs/DECISIONS.md` and `docs/DOC_AUDIT.md` are listed
-   for completeness but have no `D3.*` owner. `D3.c` only needs to add a
-   "Current work" pointer to the plan from `AGENTS.md`.
+   for completeness but had no `D3.*` owner in the hardening pass. In Wave 1,
+   W1-D2 owns `docs/DECISIONS.md` and `docs/DOC_AUDIT.md` for goal-feature
+   amendments only; `HARDENING_PLAN.md` remains untouched.
 3. No contradiction found that requires changing code; all stale claims can be
    fixed by documentation tasks without touching source files.

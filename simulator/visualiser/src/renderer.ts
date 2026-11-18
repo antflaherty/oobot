@@ -1,4 +1,4 @@
-import type { RobotPose, Obstacle, RobotShape, ToolState } from "./types";
+import type { RobotPose, Obstacle, RobotShape, ToolState, GoalArea } from "./types";
 import { lerp } from "./math";
 
 // World is an 800x600 unit box centred at origin; canvas is 800x600 px.
@@ -46,6 +46,8 @@ const WHEEL_STROKE = "#0f172a";
 const ARROW_FILL = "#ffffff";
 const OBSTACLE_FILL = "#1e293b"; // dark obstacles
 const OBSTACLE_STROKE = "#0f172a";
+const GOAL_FILL = "rgba(34, 197, 94, 0.25)"; // translucent green goal zone
+const GOAL_STROKE = "#15803d"; // darker green outline
 
 // Front-light tool indicator (id from the shared robot manifest; the
 // visualiser does not read the manifest itself, just the published states).
@@ -74,6 +76,25 @@ export function robotWheelRects(shape: RobotShape): WheelRect[] {
     length: wheel.length,
     width: wheel.width,
   }));
+}
+
+/** Canvas-space rectangle for a centre-based goal area (world units == px). */
+export interface GoalRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** Map a world goal area (centre + full extents) to canvas pixels, using the
+ * same world-to-canvas convention as obstacles: world +Y is up, canvas +Y down. */
+export function goalRect(goal: GoalArea): GoalRect {
+  return {
+    x: goal.x - goal.width / 2 + WORLD_WIDTH / 2,
+    y: WORLD_HEIGHT / 2 - (goal.y + goal.height / 2),
+    width: goal.width,
+    height: goal.height,
+  };
 }
 
 /** Circle for the front-light indicator, in body-local CANVAS coordinates
@@ -229,6 +250,21 @@ export class Renderer {
     ctx.stroke();
   }
 
+  /** Draw the goal area as a translucent filled rectangle. Null means no goal. */
+  drawGoal(goal: GoalArea | null): void {
+    if (!goal) return;
+    const { ctx } = this;
+    const rect = goalRect(goal);
+
+    ctx.save();
+    ctx.fillStyle = GOAL_FILL;
+    ctx.strokeStyle = GOAL_STROKE;
+    ctx.lineWidth = 2;
+    ctx.fillRect(rect.x, rect.y, rect.width, rect.height);
+    ctx.strokeRect(rect.x, rect.y, rect.width, rect.height);
+    ctx.restore();
+  }
+
   /** Draw static obstacles as filled rectangles. */
   drawObstacles(obstacles: Obstacle[]): void {
     const { ctx } = this;
@@ -321,7 +357,8 @@ export class Renderer {
     ctx.restore();
   }
 
-  /** Render one frame: box + obstacles + trail + robot at the given (possibly interpolated) pose.
+  /** Render one frame: box + goal + obstacles + trail + robot at the given
+   * (possibly interpolated) pose.
    *
    * Trail points are recorded by LiveStream as snapshots arrive, not here per
    * render frame, so the trail keeps tracing while the tab is hidden
@@ -332,10 +369,12 @@ export class Renderer {
     obstacles: Obstacle[] = [],
     shape: RobotShape | null = DEFAULT_SHAPE,
     toolStates: ToolState[] = [],
+    goal: GoalArea | null = null,
   ): void {
     this.clear();
     this.drawTrail();
     this.drawWorld();
+    this.drawGoal(goal);
     this.drawObstacles(obstacles);
     this.drawRobot(pose, shape, toolStates);
   }

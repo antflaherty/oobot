@@ -42,18 +42,19 @@ timing; the visualiser channel is unidirectional.
 
 ```
 oobot/
-├── robots/default.json          # shared manifest (wheels, 2 sensors, front-light tool)
+├── robots/default.json          # shared manifest (wheels, 2 proximity sensors,
+│                                 # goal sensor, front-light tool)
 ├── simulator/
 │   ├── server/                  # Node.js/TypeScript sim + WebSocket server
 │   │   ├── src/                 # index, sim, world, sensor, transport, types,
 │   │   │                        # robotDescription
-│   │   └── worlds/maze.json     # default world: bounds, start pose, obstacles
+│   │   └── worlds/maze.json     # default world: bounds, start pose, obstacles, goal
 │   └── visualiser/              # vanilla TypeScript + HTML5 canvas (vite)
 ├── robot-framework/             # Java framework, examples and student API
 │   ├── robot.jar                # local build output from `npm run build:robot`
 │   └── src/main/java/oobot/robot/
-│       ├── student/             # RobotBehaviour, Mover, Brain, Component,
-│       │                        # Wheel, ProximitySensor, Tool, BrownianMotionBehaviour
+│       ├── student/             # RobotBehaviour, Mover, Brain, Component, Wheel,
+│       │                        # Sensor, Tool, BrownianMotionBehaviour
 │       └── example/             # WheeledMover, DefaultBrain and five examples
 ├── specs/                       # wire protocol, components, sensors, launch,
 │                                 # robot description, world format
@@ -64,8 +65,9 @@ oobot/
 ```
 
 Available behaviours (`--behaviour`): `wall-follow-right` (default), `square`,
-`circle`, `heart`, `wall-avoid`, `brownian`. Five live in
-`oobot.robot.example`; the random-walk behaviour lives in `oobot.robot.student`.
+`circle`, `heart`, `wall-avoid`, `brownian`. Five live in `oobot.robot.example`;
+the random-walk behaviour lives in `oobot.robot.student`. Goal arrival is owned
+by the brain, not by a behaviour.
 
 ## Getting started
 
@@ -76,14 +78,15 @@ From the repo root (requires Node.js ≥ 20, npm ≥ 10, JDK 21+):
 ```bash
 npm install         # installs both workspaces — once
 npm run build:robot # builds robot.jar via Gradle — once (first run downloads Gradle)
-npm run dev         # starts sim server, visualiser dev server and example robot
+npm run dev         # starts sim server, visualiser dev server and robot controller
 ```
 
 `npm run dev` starts the sim first, waits for its robot port, then starts the
 visualiser and the Java controller. It passes absolute `--robot` and `--world`
 paths, so it works from any directory; Ctrl-C stops all three children. Open
 `http://localhost:5173` for the visualiser. The default robot behaviour is
-`wall-follow-right`. `robot.jar` is a local build output, not a committed file.
+`wall-follow-right` (set `ROBOT_BEHAVIOUR` to override). `robot.jar` is a local
+build output, not a committed file.
 
 ### Starting components individually
 
@@ -110,29 +113,44 @@ missing required sensor id produce a usage-style error with exit code 2.
 Both the sim and the Java controller load the same v2 manifest at startup; the
 visualiser does not. `robots/default.json` declares two wheels (`left-wheel`,
 `right-wheel`, each with a mount `angle` and radial `offset` of `0.25`), two
-proximity sensors (`front-sensor` at 0 rad, `right-sensor` at −π/2 rad) and a
-`front-light` tool at 0 rad. Wheel roles and the track width (`0.5`) are derived
-from the wheel angles and offsets; there is no `side` field. Tools declare a
-finite `angle` but no `offset`, and affect no geometry or kinematics.
+proximity sensors (`front-sensor` at 0 rad, `right-sensor` at −π/2 rad), a
+`goal-sensor` (type `goalSensor`, 0 rad) and a `front-light` tool at 0 rad.
+Wheel roles and the track width (`0.5`) are derived from the wheel angles and
+offsets; there is no `side` field. Sensors and tools declare a finite `angle`
+but no `offset`, and tools affect no geometry or kinematics.
 
-Sensor readings are ray-cast from the robot centre along `pose.heading + angle`
-against both the box edges and the static obstacles. The nearest hit becomes
-the component's reading in world units, or `null` on the wire (mapped to
-`Double.POSITIVE_INFINITY` in Java) when nothing is detected. `ProximitySensor`
-also exposes `latestSimTick()` so a behaviour can detect stale data.
+Proximity readings are ray-cast from the robot centre along `pose.heading +
+angle` against both the box edges and the static obstacles. The nearest hit
+becomes the component's reading in world units, or `null` on the wire (mapped to
+`Double.POSITIVE_INFINITY` in Java) when nothing is detected. The `goal-sensor`
+instead reports `1` when the robot centre is inside the world's goal area, `0`
+when outside, and `null` when the world declares no goal (mapped to `false` in
+Java). All sensors expose the generic `Sensor<T>` API: `latestSimTick()` (so a
+behaviour can detect stale data) and `value()` (`Sensor<Double>` for proximity,
+`Sensor<Boolean>` for the goal).
+
+The world file may declare an optional top-level `goal` area
+(`{ "x", "y", "width", "height" }`, centre-based like an obstacle). The default
+`simulator/server/worlds/maze.json` places an 80 × 80 goal at `(340, 100)`;
+the robot counts as in-goal when its centre point lies inside the rectangle.
+The sim always publishes the area as `worldSnapshot.goal` (`null` when the world
+has no goal) so the visualiser can draw it.
 
 The wire and component model are id-addressed, but the student-facing `Brain`
 sensor accessors are deliberately **fixed-id**: `frontSensor()` resolves
-`front-sensor` and `rightSensor()` resolves `right-sensor`. The controller fails
-fast with a clear message if either is missing from the manifest. `tool()` is
-instead a single reference injected by type: the one manifest tool, or
-`Tool.NOOP` if none is declared; more than one tool is a startup error.
+`front-sensor`, `rightSensor()` resolves `right-sensor` and `goalSensor()`
+resolves `goal-sensor`. The controller fails fast with a clear message if any is
+missing from the manifest. `tool()` is instead a single reference injected by
+type: the one manifest tool, or `Tool.NOOP` if none is declared; more than one
+tool is a startup error.
 
 The sim tracks tool state per id and publishes it in
 `worldSnapshot.robot.toolStates`; commands use the existing `componentCommand`
-payload (`1.0` active, `0.0` inactive, any other value ignored). The default
-`wall-follow-right` behaviour switches the front light ON in `APPROACH`, `DRIVE`
-and `TURN_RIGHT_AT_END`, and OFF in `SEARCH`, `AVOID`, `RECOVER_BACKUP`,
+payload (`1.0` active, `0.0` inactive, any other value ignored). The brain stops
+the robot and turns the front light ON once the goal sensor reports arrival;
+stale or missing goal data never lights it. The default `wall-follow-right`
+behaviour also switches the front light ON in `APPROACH`, `DRIVE` and
+`TURN_RIGHT_AT_END`, and OFF in `SEARCH`, `AVOID`, `RECOVER_BACKUP`,
 `RECOVER_TURN` and `init()`.
 
 ## Wire channels and safety
@@ -144,26 +162,26 @@ and `TURN_RIGHT_AT_END`, and OFF in `SEARCH`, `AVOID`, `RECOVER_BACKUP`,
   one tick old are ignored.
 - Visualiser channel (`ws://localhost:8081`): `worldSnapshot` (sim →
   visualiser) only. Per-connection send slots are depth-1 drop-oldest, so a slow
-  browser never blocks the sim. It carries `toolStates`; the visualiser draws a
-  small front circle for `front-light` (red `#ef4444` active, darker blue
-  `#1d4ed8` inactive).
+  browser never blocks the sim. It carries `toolStates` and the goal area; the
+  visualiser draws a small front circle for `front-light` (red `#ef4444` active,
+  darker blue `#1d4ed8` inactive) and the goal rectangle.
 - Both servers bind `0.0.0.0` for IPv4 clients and accept only localhost origins
   (or no Origin header).
 - Safe stop is two-layered: the sim zeroes its actuator state and clears tool
   states when the active robot disconnects or it shuts down, and the Java bridge
   writes one explicit wheels-only zero command for all wheels *before* closing
   or reconnecting its socket (tool state is force-resynced on reconnect).
-- Visualiser state (snapshots, clock, obstacles, cached tool states and trail)
-  resets on every connect/reconnect, including a sim tick rollback.
+- Visualiser state (snapshots, clock, obstacles, cached goal, cached tool states
+  and trail) resets on every connect/reconnect, including a sim tick rollback.
 
 ## MVP success criteria
 
 1. The simulation runs independently of the browser visualiser.
 2. A separate Java process connects to the simulation over the robot channel.
 3. Java movement commands cause the simulated robot to move.
-4. The sim publishes `componentSnapshot` readings for both proximity sensors; the
-   Java controller exposes them as `ProximitySensor` handles with
-   `distance()` and `latestSimTick()`.
+4. The sim publishes `componentSnapshot` readings for the proximity and goal
+   sensors; the Java controller exposes them as `Sensor<Double>` and
+   `Sensor<Boolean>` handles with `value()` and `latestSimTick()`.
 5. Behaviours use those handles to drive high-level `Mover` actions without
    touching sockets, JSON or wheel power values.
 6. The visualiser shows the robot, obstacles and movement without controlling
@@ -175,6 +193,9 @@ and `TURN_RIGHT_AT_END`, and OFF in `SEARCH`, `AVOID`, `RECOVER_BACKUP`,
    unusable world file is reported with a warning and an empty-world fallback.
 9. The front-light tool is switched through `componentCommand`, reflected in
    `worldSnapshot.robot.toolStates` and drawn by the visualiser.
+10. The brain stops the robot and switches the front light ON when the goal
+    sensor reports arrival, and the goal area is drawn by the visualiser from
+    `worldSnapshot.goal`.
 
 ## Docs & specs
 

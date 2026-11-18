@@ -4,5 +4,6 @@ package oobot.robot.description;
 public enum ComponentType {
     WHEEL,
     PROXIMITY_SENSOR,
+    GOAL_SENSOR,
     TOOL
 }

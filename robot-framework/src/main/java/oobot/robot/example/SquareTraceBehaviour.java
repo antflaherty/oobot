@@ -5,17 +5,17 @@ import org.slf4j.LoggerFactory;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Sensor;
 
 /**
  * Example robot behaviour: square trace.
  * <p>
  * State machine: {@code FORWARD -> TURN_RIGHT -> FORWARD -> ...}. Each state
  * lasts a fixed number of behaviour update ticks (~1 second at 20 Hz). Reads
- * the fixed-id {@link ProximitySensor} exposed by
+ * the fixed-id {@link Sensor} exposed by
  * {@link oobot.robot.student.Brain} each tick (backed by {@code componentSnapshot})
  * to exercise the sensor path; the reading is a staleness placeholder
- * ({@link ProximitySensor#latestSimTick()}) and does not influence movement.
+ * ({@link Sensor#latestSimTick()}) and does not influence movement.
  * <p>
  * Commands {@link Mover} only: {@code forward()} on FORWARD ticks,
  * {@code turnRight()} on TURN ticks. No motor power values are visible to
@@ -32,10 +32,10 @@ public class SquareTraceBehaviour implements RobotBehaviour {
     private static final int TICKS_PER_STATE = 20; // ~1 second at 20 Hz
 
     private final Mover mover;
-    private final ProximitySensor front;
-    private final ProximitySensor right;
+    private final Sensor<Double> front;
+    private final Sensor<Double> right;
 
-    public SquareTraceBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
+    public SquareTraceBehaviour(Mover mover, Sensor<Double> front, Sensor<Double> right) {
         this.mover = mover;
         this.front = front;
         this.right = right;

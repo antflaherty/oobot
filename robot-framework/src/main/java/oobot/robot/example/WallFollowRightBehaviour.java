@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import oobot.robot.student.Mover;
 import oobot.robot.student.RobotBehaviour;
-import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Sensor;
 import oobot.robot.student.Tool;
 
 /**
@@ -168,16 +168,16 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
     private boolean correctionRight;
 
     private final Mover mover;
-    private final ProximitySensor front;
-    private final ProximitySensor right;
+    private final Sensor<Double> front;
+    private final Sensor<Double> right;
     private final Tool tool;
 
     /** Backwards-compatible constructor for brains with {@link Tool#NOOP}. */
-    public WallFollowRightBehaviour(Mover mover, ProximitySensor front, ProximitySensor right) {
+    public WallFollowRightBehaviour(Mover mover, Sensor<Double> front, Sensor<Double> right) {
         this(mover, front, right, Tool.NOOP);
     }
 
-    public WallFollowRightBehaviour(Mover mover, ProximitySensor front, ProximitySensor right,
+    public WallFollowRightBehaviour(Mover mover, Sensor<Double> front, Sensor<Double> right,
                                     Tool tool) {
         this.mover = mover;
         this.front = front;
@@ -225,8 +225,8 @@ public class WallFollowRightBehaviour implements RobotBehaviour {
 
     /** The state machine body; its final {@link #state} drives the tool. */
     private void updateState() {
-        double frontDistance = this.front.distance();
-        double rightDistance = this.right.distance();
+        double frontDistance = this.front.value();
+        double rightDistance = this.right.value();
         long tick = this.right.latestSimTick();
 
         trackStall(frontDistance, rightDistance, tick);

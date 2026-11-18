@@ -4,14 +4,16 @@ Object Oriented Robotics — MVP
 
 **Status:** implemented. The world file is loaded by the sim server at startup
 (`simulator/server/src/index.ts`, `world.ts`); the older "deferred to iteration
-2" status no longer applies. Obstacles and start pose are live and are included
-in every `worldSnapshot` (`specs/WIRE_PROTOCOL.md` §6.2).
+2" status no longer applies. Obstacles, the optional goal area and the start
+pose are live and are included in every `worldSnapshot` (`specs/WIRE_PROTOCOL.md`
+§6.2).
 
 ## Purpose
 
-Defines how the simulated world is described: bounds, static obstacles and the
-robot start pose. The sim also supplies these obstacles to proximity-sensor ray
-casting and to the visualiser.
+Defines how the simulated world is described: bounds, static obstacles, an
+optional goal area and the robot start pose. The sim also supplies these
+obstacles to proximity-sensor ray casting, uses the goal area to decide when
+the robot has reached its goal, and sends both to the visualiser.
 
 ## Loading and selection
 
@@ -21,7 +23,7 @@ casting and to the visualiser.
   directory). The chosen path is logged at startup.
 - A missing, unreadable or invalid file is **not** fatal: the server logs a
   warning naming the path and reason, then falls back to the default box with
-  no obstacles and start pose `(0, 0, heading 0)`.
+  no obstacles, no goal and start pose `(0, 0, heading 0)`.
 - An invalid component manifest, by contrast, is fatal (see
   `specs/ROBOT_DESCRIPTION.md`).
 
@@ -40,6 +42,7 @@ World file JSON (the shipped default, `worlds/maze.json`):
   "width": 800,
   "height": 600,
   "robot": { "x": -340, "y": -240, "heading": 0 },
+  "goal": { "x": 340, "y": 100, "width": 80, "height": 80 },
   "obstacles": [
     { "x": -20,  "y": -260, "width": 160, "height": 80  },
     { "x": 350,  "y":  230, "width": 100, "height": 140 },
@@ -54,12 +57,27 @@ World file JSON (the shipped default, `worlds/maze.json`):
 |---|---|---|
 | `width`, `height` | number | Finite and > 0; box spans `[-width/2, width/2] × [-height/2, height/2]`. |
 | `robot` | `{ x, y, heading }` | All finite numbers; heading in radians, 0 = +X axis. |
+| `goal` | `GoalArea` | Optional; absent means the world has no goal. `{ x, y, width, height }`, centre-based like an obstacle (full extents), all finite with `width` and `height` > 0. Invalid values fail world loading normally. |
 | `obstacles` | `Obstacle[]` | Optional; may be empty. Must be an array when present. |
 
 Each obstacle is `{ x, y, width, height }` with **centre-based** semantics:
 `(x, y)` is the centre and `width`/`height` are the full extents, so the box
 spans `[x - width/2, x + width/2] × [y - height/2, y + height/2]`. Coordinates
 must be finite and `width`/`height` > 0.
+
+### Goal area
+
+`goal` is centre-based like an obstacle: `(x, y)` is the centre and
+`width`/`height` are the full extents, so the area spans
+`[x - width/2, x + width/2] × [y - height/2, y + height/2]`. Coordinates must be
+finite and `width`/`height` > 0; an invalid `goal` fails world loading with a
+message naming the file path (the same fallback as any other invalid world
+file). The shipped default `worlds/maze.json` declares the goal shown above.
+
+Only the robot **centre** point determines whether it is inside the goal; the
+manifest-derived footprint and collision rules are unchanged. The sim exposes
+`WorldModel.isInGoal(pose)` and includes the goal in every `worldSnapshot`
+payload (`goal`, or `null` when the world declares none).
 
 ### Validation rules
 
@@ -75,9 +93,29 @@ units (`WORLD_UNITS_PER_METRE = 100`, from the robot manifest's `body` block):
 - a footprint overlapping an obstacle is rejected; touching a face is allowed
   (that is where stop-dead contact leaves the robot) and backing away works.
 
-The sim constructs `WorldModel` with the parsed config, start pose and
-obstacles. `WorldModel.trackWidth` is overridden by the value derived from the
-robot manifest (D-1); world files set neither track width nor body geometry.
+The sim constructs `WorldModel` with the parsed config, start pose, obstacles
+and optional goal. `WorldModel.trackWidth` is overridden by the value derived
+from the robot manifest (D-1); world files set neither track width nor body
+geometry.
+
+## Goal use
+
+- **Robot sensing:** for a world that declares a goal, the sim publishes one
+  `goal-sensor` reading per declared `goalSensor` component in every
+  `componentSnapshot`: `1` when the robot centre is inside the goal, `0` when it
+  is outside, and `null` when the world has no goal (numeric because a reading's
+  `value` is `number | null`). Commands sent to `goal-sensor` are read-only and
+  ignored. The `goalSensor` manifest type and the wire encoding are specified in
+  `specs/ROBOT_DESCRIPTION.md` and `specs/WIRE_PROTOCOL.md`.
+- **Default behaviour:** `wall-follow-right` is the default robot behaviour.
+  Goal arrival is owned by the brain, not a behaviour: once the goal reading is
+  `true` (robot centre inside the goal) it stops the robot and turns the
+  `front-light` tool ON, and latches there for every behaviour. On stale or
+  absent data the brain never triggers arrival; `wall-follow-right` keeps its
+  own front-light rule while seeking.
+- **Publishing:** `worldSnapshot.payload.goal` carries the goal area (or `null`
+  when none is declared); the visualiser draws it before obstacles/robot and
+  treats an absent, `null` or malformed value as "no goal drawn".
 
 ## Obstacle use
 
@@ -91,15 +129,16 @@ robot manifest (D-1); world files set neither track width nor body geometry.
 - Sensing: unchanged by geometry — each proximity sensor still casts from the
   robot centre along `heading + angle` and reports the nearest hit among
   obstacles and box edges (`specs/SENSORS.md`).
-- Publishing: `worldSnapshot.payload.obstacles` is the static obstacle array,
-  sent to every visualiser each tick.
+- Publishing: `worldSnapshot.payload.obstacles` is the static obstacle array and
+  `worldSnapshot.payload.goal` is the goal area (or `null` when the world has
+  none); both are sent to every visualiser each tick.
 
 ## Session changes
 
 The world itself does not roll back. If the sim restarts, a decreasing
 `simTick` is treated as a new session by clients: the visualiser clears its
-snapshot buffer, obstacles and trail (D-5), and the Java bridge invalidates
-sensor readings and resets its seq counter (D-2/D-4).
+snapshot buffer, obstacles, cached goal and trail (D-5), and the Java bridge
+invalidates sensor readings and resets its seq counter (D-2/D-4).
 
 ## Out of scope
 

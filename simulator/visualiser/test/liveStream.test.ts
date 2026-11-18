@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
 import { LiveStream } from '../src/liveStream';
-import type { RobotShape, ToolState } from '../src/types';
+import type { RobotShape, ToolState, GoalArea } from '../src/types';
 
 /** Minimal stand-in for the browser WebSocket, cast at the injection point. */
 class FakeWebSocket {
@@ -94,18 +94,21 @@ function snapshotLine(
   y: number,
   shape?: unknown,
   toolStates?: unknown,
+  goal?: unknown,
 ): string {
   const robot: Record<string, unknown> = { x, y, heading: 0 };
   if (shape !== undefined) robot.shape = shape;
   if (toolStates !== undefined) robot.toolStates = toolStates;
+  const payload: Record<string, unknown> = {
+    robot,
+    obstacles: [{ x: 10, y: 20, width: 30, height: 40 }],
+  };
+  if (goal !== undefined) payload.goal = goal;
   const msg = {
     type: 'worldSnapshot',
     seq: tick,
     simTick: tick,
-    payload: {
-      robot,
-      obstacles: [{ x: 10, y: 20, width: 30, height: 40 }],
-    },
+    payload,
   };
   return `${JSON.stringify(msg)}\n`;
 }
@@ -664,6 +667,108 @@ test('tool state cache clears on absent field, reset, reconnect and tick rollbac
   ws2.receive(snapshotLine(0, 0, 0, undefined, [{ id: 'front-light', active: false }]));
   assert.deepEqual(stream.getToolStates(), [{ id: 'front-light', active: false }]);
   assert.equal(stream.isToolActive('front-light'), false);
+
+  stream.stop();
+});
+
+test('getGoal caches the latest goal from snapshots', () => {
+  const { stream, sockets } = makeStream();
+  stream.start();
+  const ws = sockets[0];
+  assert.ok(ws);
+  ws.open();
+
+  assert.equal(stream.getGoal(), null, 'no goal before any snapshot');
+
+  const first: GoalArea = { x: -220, y: -240, width: 80, height: 80 };
+  ws.receive(snapshotLine(1, 0, 0, undefined, undefined, first));
+  assert.deepEqual(stream.getGoal(), first);
+
+  const revised: GoalArea = { x: 10, y: 20, width: 100, height: 50 };
+  ws.receive(snapshotLine(2, 0, 0, undefined, undefined, revised));
+  assert.deepEqual(stream.getGoal(), revised, 'the newest goal must win');
+
+  stream.stop();
+});
+
+test('null and malformed goal fields are treated as no goal without dropping snapshots', () => {
+  const { stream, sockets, setNow } = makeStream();
+  stream.start();
+  const ws = sockets[0];
+  assert.ok(ws);
+  ws.open();
+
+  const cases: unknown[] = [
+    null,
+    {},
+    [],
+    'goal',
+    42,
+    { x: 1, y: 2, width: 3 }, // missing height
+    { x: 1, y: 2, width: 1e999, height: 4 }, // non-finite width
+    { x: '1', y: 2, width: 3, height: 4 }, // non-number x
+  ];
+  cases.forEach((wire, i) => {
+    const tick = i + 1;
+    ws.receive(snapshotLine(tick, 1, 2, undefined, undefined, wire));
+    assert.equal(stream.getGoal(), null, `goal case ${i} must be ignored`);
+    assert.equal(stream.getLatestTick(), tick, 'a bad goal must not drop the snapshot');
+  });
+
+  setNow(100);
+  const pose = stream.getPoseAt(100);
+  assert.ok(pose);
+  assert.ok(
+    Number.isFinite(pose.pose.x) && Number.isFinite(pose.pose.y),
+    'bad goal data must not affect the pose',
+  );
+
+  const valid: GoalArea = { x: 1, y: 2, width: 3, height: 4 };
+  ws.receive(snapshotLine(cases.length + 1, 0, 0, undefined, undefined, valid));
+  assert.deepEqual(stream.getGoal(), valid, 'a valid goal after the bad ones is accepted');
+
+  stream.stop();
+});
+
+test('goal cache clears on absent field, reset, reconnect and tick rollback', () => {
+  const { stream, sockets, setNow, fireTimers } = makeStream();
+  stream.start();
+  const ws1 = sockets[0];
+  assert.ok(ws1);
+  ws1.open();
+
+  const goal: GoalArea = { x: -220, y: -240, width: 80, height: 80 };
+  ws1.receive(snapshotLine(1, 0, 0, undefined, undefined, goal));
+  assert.deepEqual(stream.getGoal(), goal);
+
+  ws1.receive(snapshotLine(2, 0, 0)); // no goal on this snapshot
+  assert.equal(stream.getGoal(), null, 'an absent goal clears the cache');
+
+  ws1.receive(snapshotLine(3, 0, 0, undefined, undefined, goal));
+  stream.reset();
+  assert.equal(stream.getGoal(), null, 'reset() clears the cache');
+
+  ws1.receive(snapshotLine(4, 0, 0, undefined, undefined, goal));
+  ws1.close();
+  fireTimers();
+  const ws2 = sockets[1];
+  assert.ok(ws2);
+  ws2.open();
+  assert.equal(stream.getGoal(), null, 'reconnect clears the cache');
+
+  setNow(10);
+  ws2.receive(snapshotLine(100, 0, 0, undefined, undefined, goal));
+  setNow(20);
+  ws2.receive(snapshotLine(0, 0, 0)); // rollback + no goal
+  assert.equal(stream.getGoal(), null, 'rollback clears the old session goal');
+
+  // A rollback snapshot carrying a goal starts the new session with that goal.
+  const revised: GoalArea = { x: 5, y: 6, width: 7, height: 8 };
+  setNow(30);
+  ws2.receive(snapshotLine(50, 0, 0, undefined, undefined, goal));
+  setNow(40);
+  ws2.receive(snapshotLine(0, 0, 0, undefined, undefined, revised));
+  assert.deepEqual(stream.getGoal(), revised);
 
   stream.stop();
 });

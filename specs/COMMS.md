@@ -223,12 +223,16 @@ reject events are counted and reported with the 5 s achieved-Hz log (plus
 
 ### 5.2 Publish `componentSnapshot` (sim → robot)
 
-Every sim tick the sim builds one snapshot with one reading per manifest
-proximity sensor and sends it to the active robot connection via
-`transport.send(...)` (non-blocking). If no robot is connected, the send is a
-no-op. The snapshot carries the sim tick it describes; the Java bridge resets
-sensor values on disconnect/reconnect/tick rollback and exposes
-`ProximitySensor.latestSimTick()` for staleness checks (`specs/SENSORS.md`).
+Every sim tick the sim builds one snapshot with one reading per manifest sensor
+— proximity and goal sensors alike — and sends it to the active robot
+connection via `transport.send(...)` (non-blocking). Proximity readings are
+distances (`null` means nothing detected); a declared `goal-sensor` reading is
+`1` (robot centre inside the goal), `0` (outside) or `null` (world has no goal).
+`componentCommand`s targeting `goal-sensor` are read-only and ignored by the
+sim. If no robot is connected, the send is a no-op. The snapshot carries the
+sim tick it describes; the Java bridge resets all sensor values on
+disconnect/reconnect/tick rollback and exposes `Sensor<T>.latestSimTick()` for
+staleness checks (`specs/SENSORS.md`, `specs/WIRE_PROTOCOL.md`).
 
 ## 6. Publish/subscribe to visualiser clients
 
@@ -267,9 +271,10 @@ derived state on every open and on tick rollback (D-5).
 | `componentCommand` from wrong channel/connection | Log and ignore; D-4 state and actuators untouched. |
 | Duplicate/stale/invalid `componentCommand` | Log/count and ignore; no wheel/tool state change. |
 | Invalid tool value (not exactly `0` or `1`) | Log/count and ignore; tool state unchanged. |
+| `componentCommand` targeting read-only `goal-sensor` | Log/count and ignore; no sensor or actuator state change. |
 | Active robot socket closes or process dies | Sim zeroes motors and clears tools (D-2 layer A); Java had tried to write its wheels-only zero frame first (layer B). |
 | Stale robot socket closes | Log and ignore; active robot keeps running. |
-| Tick rollback / reconnect seen by Java | Invalidate sensor readings (distance → `Infinity`, tick → 0). |
+| Tick rollback / reconnect seen by Java | Invalidate all sensor readings (proximity value → `Infinity`, goal value → `false`, tick → 0). |
 | Send failure to one visualiser | Log and close that client; sim continues. |
 | Hung-but-connected process | Deferred beyond MVP: no heartbeat/timeout; WebSocket close is the only close trigger. |
 | Shutdown with an unresponsive peer | Sockets are terminated and server close waits are capped at ~2 s. |
@@ -292,8 +297,9 @@ Implement a transport behind the same `Transport` interface:
 - Envelope: `{ type, seq, simTick, payload }`; NDJSON where a text transport is
   used; `simTick` as freshness source.
 - Message types: `componentCommand`, `componentSnapshot`, `worldSnapshot`.
-- Student API: behaviours use `Mover`, `ProximitySensor` and `Tool` from their
-  `Brain`; they never know which bridge/transport is underneath.
+- Student API: behaviours use `Mover`, generic `Sensor<T>` handles
+  (`Sensor<Double>` for proximity, `Sensor<Boolean>` for the goal) and `Tool`
+  from their `Brain`; they never know which bridge/transport is underneath.
 
 This is a rationale for the abstraction, not an implemented transport.
 

@@ -57,6 +57,7 @@ function frame(): void {
       liveStream.getObstacles(),
       liveStream.getRobotShape(),
       liveStream.getToolStates(),
+      liveStream.getGoal(),
     );
     logRender(result.holding ? 'live (holding)' : 'live', latestTick);
   } else {

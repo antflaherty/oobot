@@ -4,8 +4,9 @@ Object Oriented Robotics — MVP
 
 **Status:** current. Describes the implemented v2 component protocol and the
 post-hardening connection rules, including manifest-declared tools and their
-state in `worldSnapshot`. Binding decisions: `docs/DECISIONS.md` D-2 and D-4.
-The envelope and NDJSON framing are unchanged from the original design;
+state in `worldSnapshot`, the `goalSensor` reading and the world's goal area in
+`worldSnapshot`. Binding decisions: `docs/DECISIONS.md` D-2 and D-4. The
+envelope and NDJSON framing are unchanged from the original design;
 `motorCommand` and `sensorSnapshot` were replaced by the id-addressed messages
 below.
 
@@ -181,6 +182,9 @@ have no effect on kinematics, footprint, collision or track width. Unknown ids,
 wrong component types and malformed entries are logged and ignored; the rest of
 the frame is still applied. Acceptance also requires §5.1.
 
+Commands targeting a `goalSensor` id (e.g. `goal-sensor`) are read-only: the sim
+ignores them (counting/logging if convenient) and applies nothing.
+
 Safe-stop uses this message type with one entry per bound wheel id at `0.0`
 (§7), written on the still-open socket before the Java client closes it; that
 final frame is wheels-only.
@@ -189,31 +193,40 @@ final frame is wheels-only.
 
 Published by the sim every tick to the active robot connection. The robot reads
 the latest available value on its behaviour loop (~20 Hz). There is **one
-reading per declared proximity sensor** in the manifest; each ray is cast from
-the robot centre at `heading + component.angle` (mount angle relative to
-heading; radians, 0 = forward, + = CCW, right = -π/2). A value of `null` means
-nothing was detected; the Java API maps it to `Double.POSITIVE_INFINITY`.
-There are no hardcoded front/right sensors on the wire — the fixed
-`front-sensor` / `right-sensor` accessor ids are a documented Java `Brain`
-constraint only (D-3, see `specs/ROBOT_DESCRIPTION.md`).
+reading per declared proximity sensor and one per declared `goalSensor`** in the
+manifest. Each proximity ray is cast from the robot centre at
+`heading + component.angle` (mount angle relative to heading; radians, 0 =
+forward, + = CCW, right = -π/2); a value of `null` means nothing was detected
+and the Java API maps it to `Double.POSITIVE_INFINITY`. The goal sensor reports
+whether the robot centre is inside the world's goal area (see
+`specs/WORLD_FORMAT.md`). There are no hardcoded front/right/goal sensors on the
+wire — the fixed `front-sensor` / `right-sensor` / `goal-sensor` accessor ids are
+a documented Java `Brain` constraint only (D-3, see
+`specs/ROBOT_DESCRIPTION.md`).
 
 Payload schema:
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `readings` | array | One entry per declared `proximitySensor` |
-| `readings[].id` | string | Sensor component id (e.g. `front-sensor`) |
-| `readings[].value` | number \| null | Distance in world units to nearest hit, or `null` when nothing detected |
+| `readings` | array | One entry per declared `proximitySensor` plus one per declared `goalSensor` |
+| `readings[].id` | string | Sensor component id (e.g. `front-sensor`, `goal-sensor`) |
+| `readings[].value` | number \| null | For a proximity sensor: distance in world units to the nearest hit, or `null` when nothing is detected. For a `goalSensor`: `1` = inside the goal, `0` = outside, `null` = the world has no goal (numeric because `ComponentReading.value` is `number \| null`) |
 
-Example — front wall 3.5 units ahead, right sensor detects nothing:
+Example — front wall 3.5 units ahead, right sensor detects nothing, robot inside
+the goal:
 
 ```json
 { "type": "componentSnapshot", "seq": 7, "simTick": 142,
   "payload": { "readings": [
     { "id": "front-sensor", "value": 3.5 },
-    { "id": "right-sensor", "value": null }
+    { "id": "right-sensor", "value": null },
+    { "id": "goal-sensor", "value": 1 }
   ] } }
 ```
+
+The Java bridge maps a `goalSensor` reading of `1`/`0`/`null` to a
+`Sensor<Boolean>` whose `value()` is `true`/`false`/`false` respectively;
+`false` also covers missing/stale data (`Sensor.MAX_STALE_TICKS`).
 
 ### 6.2 Visualiser channel
 
@@ -245,7 +258,8 @@ Example (matching the default `worlds/maze.json` obstacle convention):
       },
       "toolStates": [ { "id": "front-light", "active": true } ]
     },
-    "obstacles": [ { "x": -180, "y": 40, "width": 120, "height": 120 } ]
+    "obstacles": [ { "x": -180, "y": 40, "width": 120, "height": 120 } ],
+    "goal": { "x": -220, "y": -240, "width": 80, "height": 80 }
   } }
 ```
 
@@ -259,17 +273,21 @@ Payload schema:
 | `robot.shape` | object (optional) | `{ width, height, wheels: [{ angle, offset, length, width }] }`; all dimensions and `offset` in **world units**, wheel `angle` in radians. Derived from the manifest with D-1's ×100 conversion. |
 | `robot.toolStates` | array (optional) | One `{ id, active }` entry per declared `tool`, in manifest order. `id` is the manifest id; `active` is `true` for commanded `1.0`, `false` for `0.0`. |
 | `obstacles` | array of `{ x, y, width, height }` | Static axis-aligned box obstacles, centre-based (`x`,`y` = centre; `width`,`height` = full extents). May be empty. |
+| `goal` | `{ x, y, width, height }` \| null | Optional goal area from the world file, centre-based with full extents. The sim always emits this field, using `null` when the world declares no goal; the visualiser treats absent, `null` or malformed values as "no goal drawn". |
 
-The sim always sends `robot.shape` and `robot.toolStates`; both fields are
+The sim always sends `robot.shape`, `robot.toolStates` and `goal`; all three are
 optional in the schema so older snapshots remain valid. The visualiser uses
 `shape` to draw the square body and wheels (falling back to the same default
-geometry when absent) and caches `toolStates` to draw tool indicators. Missing
-`toolStates` are treated as all-inactive, and the cache is cleared on connect /
-reconnect and on a decreasing `simTick` (D-5). Envelope and all other payload
-fields are unchanged.
+geometry when absent) and caches `toolStates` to draw tool indicators. It draws
+the `goal` rectangle (before obstacles/robot) when the field is a valid area.
+Missing `toolStates` are treated as all-inactive; the cached tool states and
+goal are cleared on connect / reconnect and on a decreasing `simTick` (D-5).
+Envelope and all other payload fields are unchanged.
 `worldSnapshot` does not carry sensor readings. The visualiser renders the
-robot, its tool indicators, the box and these obstacles; it never drives sim
-timing.
+robot, its tool indicators, the box, the goal and these obstacles; it never
+drives sim timing. The brain turns `front-light` ON (visible as an active tool
+indicator) when the goal sensor reports arrival, whatever behaviour is running;
+`wall-follow-right` is the default behaviour.
 
 #### `userControl` — visualiser → sim (deferred, not implemented)
 
@@ -303,36 +321,18 @@ manual intervention covers that for now.
 
 ## 8. Sensor model
 
-The sim keeps a single slot of readings: one value per declared proximity
-sensor, overwritten every tick:
+The sim keeps a single slot of readings per declared sensor: one value per
+proximity sensor and one per `goalSensor`, overwritten every tick:
 
 - No queue, no polling; the robot always sees the most recent reading.
-- Each ray originates at the robot centre with direction
+- Each proximity ray originates at the robot centre with direction
   `heading + component.angle` and reports the nearest hit among the world box
   edges and the static obstacles from the world file, or `null` when nothing
-  is detected.
+  is detected. A goal sensor instead reads the world goal area and reports
+  `1` (robot centre inside), `0` (outside) or `null` (world has no goal).
 - `simTick` on every snapshot is the freshness reference. The Java bridge
-  invalidates readings (distance → `Infinity`, tick → 0) on disconnect,
-  reconnect and tick rollback; `ProximitySensor.latestSimTick()` lets
-  behaviour code detect stale data (see `specs/SENSORS.md`).
-- Sensor readings travel only on the robot channel; the visualiser receives
-  obstacles and the robot pose, never sensor values.
-
-## 9. Summary table: message types per channel
-
-| Channel | Message | Direction | `simTick` | Status | Payload / notes |
-|---------|---------|-----------|-----------|--------|-----------------|
-| Robot (`ROBOT_PORT`) | `componentCommand` | robot → sim | Yes | Implemented | `{ commands: [{ id, value }] }`; wheel `value` in `[-1, 1]`; persistent actuator state; one batched frame per behaviour tick; D-4 checks apply |
-| Robot (`ROBOT_PORT`) | `componentSnapshot` | sim → robot | Yes | Implemented | `{ readings: [{ id, value }] }`, value number or `null`; one reading per declared proximity sensor |
-| Visualiser (`VISUALISER_PORT`) | `worldSnapshot` | sim → visualiser | Yes | Implemented | `{ robot: { x, y, heading, shape?, toolStates? }, obstacles: [...] }` (shape in world units); drop-oldest backpressure; channel is unidirectional |
-| Visualiser (`VISUALISER_PORT`) | `userControl` | visualiser → sim | — | Deferred | Start/pause/reset idea; no payload schema, not sent |
-
-## 10. Deferred beyond MVP
-
-- Heartbeat/timeout for hung-process detection (safe-stop relies on WebSocket
-  close and the Java zero-before-close frame).
-- Binary framing (revisit only if NDJSON parsing proves a bottleneck).
-- `userControl` messages on the visualiser channel.
-- Robot IDs / multi-robot support.
-- Formal error protocol (malformed input is logged and ignored).
-- Generic `Brain` sensor accessors (the fixed ids are documented in D-3).
+  invalidates both sensor maps (distance → `Infinity` / goal → `false`, tick →
+  0) on disconnect, reconnect and tick rollback; `Sensor<T>.latestSimTick()`
+  lets behaviour code detect stale data, with staleness threshold
+  `Sensor.MAX_STALE_TICKS` (30 sim ticks). See `specs/SENSORS.md`.
+- Sensor readings travel only on

@@ -11,6 +11,8 @@ import { WebSocket } from "ws";
 
 import {
   Channel,
+  ComponentSnapshotPayload,
+  GoalArea,
   Handlers,
   IncomingEnvelope,
   OutgoingEnvelope,
@@ -32,6 +34,7 @@ const DESCRIPTION: RobotDescription = {
     { id: "right-wheel", type: "wheel", angle: -Math.PI / 2, offset: 0.25 },
     { id: "front-sensor", type: "proximitySensor", angle: 0, offset: 0 },
     { id: "front-light", type: "tool", angle: 0, offset: 0 },
+    { id: "goal-sensor", type: "goalSensor", angle: 0, offset: 0 },
   ],
 };
 
@@ -120,6 +123,23 @@ function componentCommand(
 
 function toolCommand(seq: number, simTick: number | undefined, value: number): IncomingEnvelope {
   return componentCommand(seq, simTick, [{ id: "front-light", value }]);
+}
+
+function latestEnvelope(
+  transport: FakeTransport,
+  type: OutgoingEnvelope["type"],
+): OutgoingEnvelope | undefined {
+  const matches = transport.sent.filter((entry) => entry.envelope.type === type);
+  return matches.length > 0 ? matches[matches.length - 1].envelope : undefined;
+}
+
+function goalSensorReading(payload: unknown): number | null | undefined {
+  if (typeof payload !== "object" || payload === null || !("readings" in payload)) {
+    return undefined;
+  }
+  const readings = (payload as ComponentSnapshotPayload).readings;
+  if (!Array.isArray(readings)) return undefined;
+  return readings.find((reading) => reading.id === "goal-sensor")?.value;
 }
 
 // ---- Acceptance criterion: visualiser commands are ignored and logged -----
@@ -372,6 +392,129 @@ test("D-4: duplicate, stale and invalid tool commands are ignored", () => {
 
   transport.message(robot, toolCommand(4, 4, 0)); // exactly one tick older is accepted
   assert.deepEqual(engine.getState().toolStates, { "front-light": false });
+});
+
+// ---- Goal sensor component ------------------------------------------------
+
+test("goal-sensor readings are 1 inside the goal, 0 outside, null with no goal", async () => {
+  const cases: Array<{ label: string; goal: GoalArea | null; expected: number | null }> = [
+    { label: "inside", goal: { x: 0, y: 0, width: 100000, height: 100000 }, expected: 1 },
+    { label: "outside", goal: { x: 100000, y: 100000, width: 10, height: 10 }, expected: 0 },
+    { label: "no goal", goal: null, expected: null },
+  ];
+
+  for (const { label, goal, expected } of cases) {
+    const transport = new FakeTransport();
+    const engine = new SimEngine(transport, DESCRIPTION, undefined, undefined, [], goal);
+    engine.start();
+    try {
+      transport.connect("robot");
+      transport.connect("visualiser");
+
+      await waitFor(() => {
+        const snapshot = latestEnvelope(transport, "componentSnapshot");
+        return (
+          snapshot?.type === "componentSnapshot" &&
+          goalSensorReading(snapshot.payload) === expected
+        );
+      });
+      const snapshot = latestEnvelope(transport, "componentSnapshot");
+      assert.ok(snapshot?.type === "componentSnapshot", `${label}: expected componentSnapshot`);
+      const readings = (snapshot.payload as ComponentSnapshotPayload).readings;
+      assert.equal(
+        readings.filter((reading) => reading.id === "goal-sensor").length,
+        1,
+        `${label}: exactly one reading per declared goal sensor`,
+      );
+      assert.equal(goalSensorReading(snapshot.payload), expected, label);
+
+      await waitFor(() => latestEnvelope(transport, "worldSnapshot") !== undefined);
+      const world = latestEnvelope(transport, "worldSnapshot");
+      assert.ok(world?.type === "worldSnapshot", `${label}: expected worldSnapshot`);
+      assert.ok("goal" in (world.payload as object), `${label}: goal is always on the payload`);
+      assert.deepEqual((world.payload as WorldSnapshotPayload).goal, goal, label);
+    } finally {
+      engine.stop();
+    }
+  }
+});
+
+test("componentCommand to goal-sensor is read-only and counted as ignored", () => {
+  const transport = new FakeTransport();
+  const engine = startedEngine(transport);
+  const robot = transport.connect("robot");
+  const before = engine.getState();
+
+  const logs: string[] = [];
+  const originalLog = console.log;
+  console.log = (...args: unknown[]) => {
+    logs.push(args.map((arg) => String(arg)).join(" "));
+  };
+  try {
+    transport.message(robot, componentCommand(0, 5, [{ id: "goal-sensor", value: 1 }]));
+  } finally {
+    console.log = originalLog;
+  }
+
+  assert.deepEqual(engine.getState().command, before.command);
+  assert.deepEqual(engine.getState().toolStates, before.toolStates);
+  assert.equal(
+    engine.getState().counters.commandsIgnored,
+    before.counters.commandsIgnored + 1,
+    "goal-sensor commands must be counted as ignored",
+  );
+  assert.ok(
+    logs.some((line) => line.includes("ignoring") && line.includes("goal-sensor")),
+    "goal-sensor command must be logged as ignored",
+  );
+});
+
+test("goal-derived readings are invalidated on reset and recomputed each tick", async () => {
+  const goal: GoalArea = { x: 0, y: 0, width: 100000, height: 100000 };
+  const transport = new FakeTransport();
+  const engine = new SimEngine(transport, DESCRIPTION, undefined, undefined, [], goal);
+  const internal = engine as unknown as {
+    latestReadings: Array<{ id: string; value: number | null }>;
+  };
+  engine.start();
+  try {
+    const robotA = transport.connect("robot");
+    const hasFreshReading = (connectionId: string): boolean =>
+      transport.sent.some(
+        (entry) =>
+          entry.connectionId === connectionId &&
+          entry.envelope.type === "componentSnapshot" &&
+          goalSensorReading(entry.envelope.payload) === 1,
+      );
+
+    await waitFor(() => hasFreshReading(robotA));
+    assert.ok(
+      internal.latestReadings.some((reading) => reading.id === "goal-sensor"),
+      "a goal reading should be cached between ticks",
+    );
+
+    // A new robot claiming the slot resets command state: drop the derived
+    // goal reading so no stale value survives into the new controller.
+    const robotB = transport.connect("robot");
+    assert.ok(
+      !internal.latestReadings.some((reading) => reading.id === "goal-sensor"),
+      "robot slot reset must invalidate goal-derived state",
+    );
+
+    await waitFor(() => hasFreshReading(robotB));
+    assert.ok(
+      internal.latestReadings.some((reading) => reading.id === "goal-sensor"),
+      "goal readings must be recomputed on the next tick",
+    );
+
+    engine.stop();
+    assert.ok(
+      !internal.latestReadings.some((reading) => reading.id === "goal-sensor"),
+      "sim shutdown must invalidate goal-derived state",
+    );
+  } finally {
+    engine.stop();
+  }
 });
 
 // ---- worldSnapshot advertises the collision footprint --------------------

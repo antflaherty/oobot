@@ -43,7 +43,7 @@ import java.util.concurrent.atomic.AtomicLong;
  *       {@code componentCommand} NDJSON frame at the end of each behaviour
  *       tick (see {@link #flushCommands()}).</li>
  *   <li>Parse incoming {@code componentSnapshot} messages and update the bound
- *       proximity sensor handles; unknown ids are ignored.</li>
+ *       proximity and goal sensor handles by id; unknown ids are ignored.</li>
  *   <li>On every disconnect/shutdown, write one explicit zero command for all
  *       wheels <em>before</em> closing the socket (D-2 layer B), and invalidate
  *       all sensor readings. The zero frame deliberately excludes tools; the
@@ -75,6 +75,7 @@ public class SimRobot implements RobotPlatform {
 
     private final ComponentRegistry registry;
     private final Map<String, SimProximitySensor> sensorsById = new LinkedHashMap<>();
+    private final Map<String, SimGoalSensor> goalSensorsById = new LinkedHashMap<>();
 
     private final Object connectionLock = new Object();
     private final Object closeLock = new Object();
@@ -119,6 +120,11 @@ public class SimRobot implements RobotPlatform {
                 case PROXIMITY_SENSOR -> {
                     SimProximitySensor sensor = new SimProximitySensor(component.id());
                     sensorsById.put(component.id(), sensor);
+                    registry.bind(component.id(), sensor);
+                }
+                case GOAL_SENSOR -> {
+                    SimGoalSensor sensor = new SimGoalSensor(component.id());
+                    goalSensorsById.put(component.id(), sensor);
                     registry.bind(component.id(), sensor);
                 }
                 case TOOL -> {
@@ -373,14 +379,21 @@ public class SimRobot implements RobotPlatform {
                 if (sensor != null) {
                     sensor.update(simTick, reading.value());
                 }
+                SimGoalSensor goalSensor = goalSensorsById.get(reading.id());
+                if (goalSensor != null) {
+                    goalSensor.update(simTick, reading.value());
+                }
             }
         }
     }
 
-    /** Clear all sensor state and the last seen tick. Caller holds connectionLock. */
+    /** Clear both sensor maps and the last seen tick. Caller holds connectionLock. */
     private void clearSensorStateLocked() {
         for (SimProximitySensor sensor : sensorsById.values()) {
             sensor.update(0L, null); // distance() -> Infinity
+        }
+        for (SimGoalSensor sensor : goalSensorsById.values()) {
+            sensor.update(0L, null); // value() -> false
         }
         latestSimTick = 0L;
     }

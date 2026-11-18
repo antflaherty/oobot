@@ -10,7 +10,7 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 
 import oobot.robot.student.Mover;
-import oobot.robot.student.ProximitySensor;
+import oobot.robot.student.Sensor;
 import oobot.robot.student.Tool;
 
 /**
@@ -35,7 +35,7 @@ class WallFollowRightBehaviourTest {
         void clear() { commands.clear(); }
     }
 
-    private static final class FakeSensor implements ProximitySensor {
+    private static final class FakeSensor implements Sensor<Double> {
         private final String id;
         private double distance = Double.POSITIVE_INFINITY;
         private long tick;
@@ -49,7 +49,7 @@ class WallFollowRightBehaviourTest {
 
         @Override public String id() { return id; }
         @Override public long latestSimTick() { return tick; }
-        @Override public double distance() { return distance; }
+        @Override public Double value() { return distance; }
     }
 
     /** Records the tool state set at the end of each update. */
