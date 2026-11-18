@@ -24,7 +24,7 @@ This is a technical proof of concept, not a complete learning product. See
          |                                     +------------------------+
          +-------------------------------------+  Visualiser            |
               (human watches; no control path) |  (vanilla TS + canvas) |
-                                               |  live WS + fallback    |
+                                               |  live WS only          |
                                                |  hold-last/interpolate |
                                                +------------------------+
 ```
@@ -89,7 +89,7 @@ paths, so it works from any directory; Ctrl-C stops all three children. Open
 | Component | Command (from repo root) | Notes |
 |-----------|--------------------------|-------|
 | Sim server | `npm run dev:server` | Defaults: `simulator/server/worlds/maze.json` and `robots/default.json`, resolved from the server source. From `simulator/server/`, use `npm run dev -- --world <path> --robot <path>` to override. |
-| Visualiser | `npm run dev:visualiser` | Vite dev server; connects to `ws://localhost:8081`, with a hardcoded fallback if no sim is running. |
+| Visualiser | `npm run dev:visualiser` | Vite dev server; connects to `ws://localhost:8081` and shows a "no connection" message until the sim is running. |
 | Robot | `npm run dev:robot` | Launches the JAR with an absolute `--robot` path and `wall-follow-right`. |
 
 From `robot-framework/` the equivalent direct launch is:

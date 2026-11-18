@@ -132,9 +132,9 @@ The visualiser (`simulator/visualiser/`) connects to the visualiser channel and
 renders `worldSnapshot` messages: robot pose, heading and the obstacle list.
 It holds the last snapshot and interpolates toward the next available one on
 each animation frame; when no newer snapshot exists it holds the last pose
-(no extrapolation). A hardcoded fallback stream keeps the demo viewable when
-no sim is running. The trail is cleared on mode switches and on every
-(re)connect; snapshots, interpolation clock and obstacles are also reset when a
+(no extrapolation). With no live sim data the canvas is empty and a "no
+connection" message is displayed. The trail is cleared on every (re)connect;
+snapshots, interpolation clock and obstacles are also reset when a
 sim tick rolls back, so a restarted sim cannot freeze or duplicate rendering
 (D-5). The visualiser never sends messages to the sim.
 
@@ -227,7 +227,7 @@ oobot/
 │   │   ├── src/                 # index, sim, world, sensor, transport,
 │   │   │                        # types, robotDescription
 │   │   └── worlds/maze.json     # default world and obstacles
-│   └── visualiser/              # live stream, fallback stream, renderer, math
+│   └── visualiser/              # live stream, renderer, math
 ├── robot-framework/             # controller, framework, student API, examples
 ├── specs/                       # WIRE_PROTOCOL, COMMS, COMPONENTS, SENSORS,
 │                                 # ROBOT_DESCRIPTION, ROBOT_LAUNCH, WORLD_FORMAT

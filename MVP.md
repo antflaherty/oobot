@@ -37,8 +37,9 @@ command line.
     channel (`worldSnapshot` with robot pose and obstacles).
 -   A simulation that advances independently of the visualiser, with best-effort
     timing and achieved-Hz logging.
--   A browser visualiser with hold-last-frame interpolation, a fallback demo,
-    obstacle rendering and a trail; state resets on reconnect.
+-   A browser visualiser with hold-last-frame interpolation, obstacle rendering
+    and a trail; state resets on reconnect. With no sim data it shows an empty
+    canvas and a "no connection" message.
 -   Six example behaviours: `square`, `circle`, `heart`, `wall-avoid`,
     `wall-follow-right` (default) and `brownian`.
 -   Safe stop from both sides: sim zeroes motors on active-robot close/shutdown,

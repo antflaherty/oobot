@@ -51,9 +51,8 @@ oobot/
 │   │   ├── package.json      # ts-node, ws, typescript
 │   │   └── tsconfig.json
 │   └── visualiser/           # vanilla TS + HTML5 canvas (vite)
-│       ├── src/main.ts       # entry: live WS or hardcoded fallback stream
+│       ├── src/main.ts       # entry: live WS only, empty canvas + status when disconnected
 │       ├── src/liveStream.ts # WS client + NDJSON buffer + interpolation/reset
-│       ├── src/snapshotStream.ts # hardcoded fallback keyframes
 │       ├── src/renderer.ts   # canvas drawing
 │       ├── src/math.ts
 │       ├── src/types.ts

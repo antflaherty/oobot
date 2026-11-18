@@ -155,15 +155,14 @@ enforces safe stop.
 ### 2.1 Purpose
 
 Browser client that renders the simulated world. It is fully decoupled from
-sim timing; it uses the live WebSocket when available and a hardcoded fallback
-stream otherwise.
+sim timing; it renders only live WebSocket data and shows a "no connection"
+message when there is none.
 
 ### 2.2 Inputs
 
 - `worldSnapshot` NDJSON on `ws://localhost:VISUALISER_PORT` (hardcoded URL;
   no discovery). Partial NDJSON lines are buffered across `onmessage` calls;
   malformed or invalid snapshots are logged and ignored.
-- Hardcoded fallback keyframes used only when the socket is not connected.
 - `requestAnimationFrame` render clock (~60 fps).
 
 ### 2.3 Outputs
@@ -320,7 +319,7 @@ the two sensor accessors; none touch transport code.
 | ~20 Hz update()     |                            v
 +---------------------+                   +---------------------+
                                           | Visualiser (canvas) |
-                                          | live WS + fallback  |
+                                          | live WS only        |
                                           | holds/interpolates  |
                                           +---------------------+
 ```

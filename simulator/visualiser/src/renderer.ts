@@ -1,9 +1,20 @@
-import type { RobotPose, WorldSnapshot, Obstacle, RobotShape } from "./types";
-import { WORLD_WIDTH, WORLD_HEIGHT, DEFAULT_SHAPE } from "./snapshotStream";
+import type { RobotPose, Obstacle, RobotShape } from "./types";
 import { lerp } from "./math";
 
-// Re-exported so callers/tests can use the same fallback geometry the renderer uses.
-export { DEFAULT_SHAPE };
+// World is an 800x600 unit box centred at origin; canvas is 800x600 px.
+export const WORLD_WIDTH = 800;
+export const WORLD_HEIGHT = 600;
+
+// Default robot geometry (50x50 body, two wheels at +/-pi/2), used when a
+// snapshot omits the optional shape field. The sim always sends its own shape.
+export const DEFAULT_SHAPE: RobotShape = {
+  width: 50,
+  height: 50,
+  wheels: [
+    { angle: Math.PI / 2, offset: 25, length: 30, width: 10 },
+    { angle: -Math.PI / 2, offset: 25, length: 30, width: 10 },
+  ],
+};
 
 // Canvas coordinate mapping (MVP decision, documented here):
 //
@@ -259,8 +270,8 @@ export class Renderer {
 
   /** Render one frame: box + obstacles + trail + robot at the given (possibly interpolated) pose.
    *
-   * Trail points are recorded by the stream (LiveStream / snapshotStream) as snapshots
-   * arrive, not here per render frame, so the trail keeps tracing while the tab is hidden
+   * Trail points are recorded by LiveStream as snapshots arrive, not here per
+   * render frame, so the trail keeps tracing while the tab is hidden
    * (requestAnimationFrame pauses) instead of drawing one jump line on return.
    */
   render(

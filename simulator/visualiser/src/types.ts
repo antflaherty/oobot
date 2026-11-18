@@ -39,7 +39,7 @@ export interface WorldSnapshotPayload {
     y: number;
     // Robot heading in radians; 0 = +X axis
     heading: number;
-    // Optional for older/fallback snapshots; the sim always sends it.
+    // Optional for older snapshots; the sim always sends it.
     shape?: RobotShape;
   };
   obstacles: Obstacle[]; // static obstacles (iteration 2)

@@ -10,8 +10,8 @@ Vanilla TypeScript + HTML5 canvas browser application (vite).
 - Holds the last received `worldSnapshot` and interpolates to the next on each
   render tick. State (snapshot buffer, interpolation clock, trail) resets on
   every connect/reconnect and when `simTick` goes backwards (D-5).
-- Uses the hardcoded keyframe stream in `src/snapshotStream.ts` only as a
-  fallback when no live sim is available.
+- With no live sim data, leaves the canvas empty and shows a "no connection"
+  status message; it does not play a demo stream.
 - Does not drive or block simulation timing.
 
 ## Build and test
