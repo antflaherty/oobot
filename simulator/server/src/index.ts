@@ -19,6 +19,7 @@
 import { WebSocketTransport } from "./transport";
 import { SimEngine } from "./sim";
 import { loadRobotDescription } from "./robotDescription";
+import { toRobotShape } from "./geometry";
 import { TransportOptions, RobotPose, Obstacle } from "./types";
 import {
   loadWorldFile,
@@ -66,6 +67,13 @@ async function main(): Promise<void> {
   const robotPort = parsePort("ROBOT_PORT", process.env.ROBOT_PORT, 8080);
   const visualiserPort = parsePort("VISUALISER_PORT", process.env.VISUALISER_PORT, 8081);
   const options: TransportOptions = { robotPort, visualiserPort };
+  // The manifest defines the physical footprint, so load it before the world
+  // file: spawn validation needs the full robot shape.
+  const robotDescriptionPathResolved = optionPath("--robot", DEFAULT_ROBOT_FILE);
+  const robotDescription = loadRobotDescription(robotDescriptionPathResolved);
+  const shape = toRobotShape(robotDescription.body, robotDescription.components);
+  log(`loaded robot manifest: ${robotDescription.name} (${robotDescriptionPathResolved}) — ${robotDescription.components.length} components`);
+
   const worldFile = optionPath("--world", DEFAULT_WORLD_FILE);
 
   const transport = new WebSocketTransport();
@@ -76,7 +84,7 @@ async function main(): Promise<void> {
   let obstacles: Obstacle[] = [];
 
   try {
-    const loaded = loadWorldFile(worldFile);
+    const loaded = loadWorldFile(worldFile, shape);
     worldConfig = loaded.config;
     startPose = loaded.startPose;
     obstacles = loaded.obstacles;
@@ -92,10 +100,6 @@ async function main(): Promise<void> {
       } — falling back to empty default world`,
     );
   }
-
-  const robotDescriptionPathResolved = optionPath("--robot", DEFAULT_ROBOT_FILE);
-  const robotDescription = loadRobotDescription(robotDescriptionPathResolved);
-  log(`loaded robot manifest: ${robotDescription.name} (${robotDescriptionPathResolved}) — ${robotDescription.components.length} components`);
 
   const sim = new SimEngine(transport, robotDescription, worldConfig, startPose, obstacles);
 

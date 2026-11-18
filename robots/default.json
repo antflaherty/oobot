@@ -1,6 +1,7 @@
 {
   "schemaVersion": 2,
   "name": "default-two-wheel",
+  "body": { "width": 0.5, "height": 0.5, "wheels": { "length": 0.3, "width": 0.1 } },
   "components": [
     { "id": "left-wheel",   "type": "wheel",           "angle": 1.5707963267948966,  "offset": 0.25 },
     { "id": "right-wheel",  "type": "wheel",           "angle": -1.5707963267948966, "offset": 0.25 },

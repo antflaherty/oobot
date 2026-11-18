@@ -1,0 +1,11 @@
+{
+  "schemaVersion": 2,
+  "name": "body-layout",
+  "body": { "width": 0.6, "height": 0.4, "wheels": { "length": 0.25, "width": 0.12 } },
+  "components": [
+    { "id": "left-wheel",   "type": "wheel",           "angle": 1.5707963267948966,  "offset": 0.25 },
+    { "id": "right-wheel",  "type": "wheel",           "angle": -1.5707963267948966, "offset": 0.25 },
+    { "id": "front-sensor", "type": "proximitySensor", "angle": 0.0 },
+    { "id": "right-sensor", "type": "proximitySensor", "angle": -1.5707963267948966 }
+  ]
+}

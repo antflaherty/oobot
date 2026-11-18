@@ -1,16 +1,18 @@
 // Bounded-box 2D world model (iteration 1 world + iteration 2 obstacles).
 //
-// The world is a rectangle centred at the origin. The robot is a point with
-// pose (x, y, heading) where heading is in radians and 0 points along the +X
-// axis. The world may contain a static set of axis-aligned box obstacles
-// (see the Obstacle interface) that the front proximity sensor can detect via
-// ray casting.
+// The world is a rectangle centred at the origin. The robot pose is
+// (x, y, heading) in radians (0 = +X). Motion is differential drive, and the
+// physical footprint is a body box plus wheel boxes (see geometry.ts); those
+// boxes drive collision with the box edges and static axis-aligned obstacles.
+// Proximity sensing still casts rays from the centre — it is unaffected by the
+// footprint.
 //
 // Kinematics: differential drive. Motor powers left/right in [-1, 1] are
 // converted to metres/second before computing angular velocity (D-1); linear
 // speed stays in world units/second. The pose is integrated each fixed
-// timestep and clamped at the box edges with stop-dead collision response (no
-// sliding, bouncing, or penetration).
+// timestep; if the candidate footprint is blocked, translation is shortened to
+// the furthest clear fraction and rotation is held when it alone would
+// penetrate (stop-dead, no sliding, bouncing, or penetration).
 //
 // NOTE: box dimensions, max speed, track width and start pose are scaffolding
 // decisions (specs/COMPONENTS.md §1.4, §1.7 say "fixed at scaffolding"). They
@@ -18,9 +20,21 @@
 
 import * as fs from "fs";
 
+import {
+  RobotShape,
+  WorldBounds,
+  defaultRobotShape,
+  footprintTouchesBounds,
+  footprintWithinBounds,
+  isFootprintClear,
+  isFootprintClearOfObstacles,
+  WORLD_UNITS_PER_METRE,
+} from "./geometry";
+
 // The world box is in world units, but wheel speed and track width are in
-// metres (see docs/DECISIONS.md D-1). This is the single conversion point.
-export const WORLD_UNITS_PER_METRE = 100;
+// metres (see docs/DECISIONS.md D-1). geometry.ts is the conversion point;
+// re-export here so existing imports keep working.
+export { WORLD_UNITS_PER_METRE } from "./geometry";
 
 export interface WorldConfig {
   width: number;      // world units, X extent of the box
@@ -56,6 +70,9 @@ export class WorldModel {
   // ray caster / sensor slot can query them.
   public readonly obstacles: Obstacle[];
 
+  // Physical collision footprint in world units (body + wheel boxes).
+  public readonly shape: RobotShape;
+
   private readonly dt: number;
   private readonly maxSpeed: number;
   private readonly trackWidth: number;
@@ -66,6 +83,7 @@ export class WorldModel {
     config: WorldConfig = DEFAULT_WORLD_CONFIG,
     startPose: RobotPose = DEFAULT_START_POSE,
     obstacles: Obstacle[] = [],
+    shape: RobotShape = defaultRobotShape(),
   ) {
     this.minX = -config.width / 2;
     this.maxX = config.width / 2;
@@ -74,6 +92,11 @@ export class WorldModel {
     // Shallow copy so callers can't mutate our obstacle list through the
     // reference they passed in.
     this.obstacles = [...obstacles];
+    this.shape = {
+      width: shape.width,
+      height: shape.height,
+      wheels: shape.wheels.map((wheel) => ({ ...wheel })),
+    };
     this.dt = 1 / config.tickRate;
     this.maxSpeed = config.maxSpeed;
     this.trackWidth = config.trackWidth;
@@ -81,9 +104,8 @@ export class WorldModel {
   }
 
   // Apply one tick of differential-drive motion with the given motor powers.
-  // Returns flags indicating whether either axis was clamped at a box edge
-  // and whether the robot came into contact with an obstacle or box edge
-  // (stop-dead collision response).
+  // Returns flags indicating whether the footprint was stopped at a box edge
+  // and whether the robot came into contact with an obstacle or box edge.
   apply(left: number, right: number): { clampedX: boolean; clampedY: boolean; collided: boolean } {
     const l = clamp(left, -1, 1);
     const r = clamp(right, -1, 1);
@@ -95,55 +117,74 @@ export class WorldModel {
     const linear = ((vLeft + vRight) / 2) * WORLD_UNITS_PER_METRE; // world units / s
     const angular = (vRight - vLeft) / this.trackWidth;            // radians / s
 
-    const newHeading = this.pose.heading + angular * this.dt;
+    const oldHeading = this.pose.heading;
+    const newHeading = oldHeading + angular * this.dt;
     // Integrate translation at the midpoint heading for smoother curves.
-    const midHeading = this.pose.heading + angular * this.dt / 2;
+    const midHeading = oldHeading + angular * this.dt / 2;
 
     const px = this.pose.x;
     const py = this.pose.y;
+    const targetX = px + Math.cos(midHeading) * linear * this.dt;
+    const targetY = py + Math.sin(midHeading) * linear * this.dt;
 
-    let nx = px + Math.cos(midHeading) * linear * this.dt;
-    let ny = py + Math.sin(midHeading) * linear * this.dt;
-
+    const bounds: WorldBounds = {
+      minX: this.minX, maxX: this.maxX, minY: this.minY, maxY: this.maxY,
+    };
+    let next: RobotPose = { x: targetX, y: targetY, heading: newHeading };
     let clampedX = false;
     let clampedY = false;
     let collided = false;
 
-    // Obstacle collision: ray-cast from the current position toward the
-    // intended new position and stop at the first contact point (stop-dead,
-    // no penetration). The robot keeps rotating even when translation stops.
-    const dx = nx - px;
-    const dy = ny - py;
-    const dist = Math.hypot(dx, dy);
-    if (dist > 0 && this.obstacles.length > 0) {
-      const ux = dx / dist;
-      const uy = dy / dist;
-      let nearestT: number | null = null;
-      for (const obs of this.obstacles) {
-        const t = rayVsAxisAlignedBox(px, py, ux, uy, obs);
-        if (t !== null && t <= dist && (nearestT === null || t < nearestT)) {
-          nearestT = t;
-        }
+    if (!isFootprintClear(next, this.shape, bounds, this.obstacles)) {
+      collided = true;
+      // Shorten the translation at the new heading; if rotating alone would
+      // penetrate the footprint, retry the translation at the old heading.
+      let resolved = this.resolveTranslation(px, py, targetX, targetY, newHeading, bounds);
+      if (resolved === null) {
+        resolved = this.resolveTranslation(px, py, targetX, targetY, oldHeading, bounds);
       }
-      if (nearestT !== null) {
-        nx = px + nearestT * ux;
-        ny = py + nearestT * uy;
-        collided = true;
-      }
+      next = resolved ?? { x: px, y: py, heading: oldHeading };
+
+      // A boundary contact is reported separately from an obstacle contact.
+      const touching = footprintTouchesBounds(next, this.shape, bounds);
+      clampedX = touching.x;
+      clampedY = touching.y;
     }
 
-    if (nx < this.minX) { nx = this.minX; clampedX = true; }
-    else if (nx > this.maxX) { nx = this.maxX; clampedX = true; }
-
-    if (ny < this.minY) { ny = this.minY; clampedY = true; }
-    else if (ny > this.maxY) { ny = this.maxY; clampedY = true; }
-
-    // Boundary clamping is a collision too: the sim log keys off `collided`
-    // and must not claim "obstacle/boundary" when only a box edge was hit.
-    if (clampedX || clampedY) collided = true;
-
-    this.pose = { x: nx, y: ny, heading: newHeading };
+    this.pose = next;
     return { clampedX, clampedY, collided };
+  }
+
+  // Furthest clear point on the segment from the current pose to the target,
+  // evaluated at a fixed heading. Returns null when even zero translation is
+  // blocked at that heading (the caller then tries the old heading / holds).
+  private resolveTranslation(
+    px: number,
+    py: number,
+    targetX: number,
+    targetY: number,
+    heading: number,
+    bounds: WorldBounds,
+  ): RobotPose | null {
+    const at = (fraction: number): RobotPose => ({
+      x: px + (targetX - px) * fraction,
+      y: py + (targetY - py) * fraction,
+      heading,
+    });
+    const clear = (fraction: number): boolean =>
+      isFootprintClear(at(fraction), this.shape, bounds, this.obstacles);
+
+    if (clear(1)) return at(1);
+    if (!clear(0)) return null;
+
+    let low = 0;
+    let high = 1;
+    for (let i = 0; i < 20; i++) {
+      const mid = (low + high) / 2;
+      if (clear(mid)) low = mid;
+      else high = mid;
+    }
+    return at(low);
   }
 
   // Distance from the ray origin along the front-facing ray (given by heading,
@@ -266,7 +307,11 @@ export interface LoadedWorld {
 // yields an empty world. Throws with the file path in the message on any
 // invalid input — callers (e.g. the server entry point) are expected to catch
 // and fall back to defaults rather than crash.
-export function parseWorld(raw: string, filePath: string): LoadedWorld {
+export function parseWorld(
+  raw: string,
+  filePath: string,
+  shape: RobotShape = defaultRobotShape(),
+): LoadedWorld {
   const parsed = JSON.parse(raw);
 
   if (!isObject(parsed)) {
@@ -323,27 +368,23 @@ export function parseWorld(raw: string, filePath: string): LoadedWorld {
   }
   const startPose: RobotPose = { x: robot.x, y: robot.y, heading: robot.heading };
 
-  const minX = -width / 2;
-  const maxX = width / 2;
-  const minY = -height / 2;
-  const maxY = height / 2;
-  if (startPose.x < minX || startPose.x > maxX || startPose.y < minY || startPose.y > maxY) {
+  const bounds: WorldBounds = {
+    minX: -width / 2,
+    maxX: width / 2,
+    minY: -height / 2,
+    maxY: height / 2,
+  };
+  if (!footprintWithinBounds(startPose, shape, bounds)) {
     throw new Error(
       `world file "${filePath}": start pose (${startPose.x}, ${startPose.y}) is outside the box ` +
-        `x[${minX},${maxX}] y[${minY},${maxY}]`,
+        `x[${bounds.minX},${bounds.maxX}] y[${bounds.minY},${bounds.maxY}]`,
     );
   }
 
-  // A point on a face is allowed (that is where stop-dead contact leaves the
-  // robot); only a start strictly inside an obstacle is unsafe.
+  // The full footprint must fit. A face touching an obstacle is allowed (that
+  // is where stop-dead contact leaves the robot); only overlap is unsafe.
   for (let i = 0; i < obstacles.length; i++) {
-    const obs = obstacles[i];
-    if (
-      startPose.x > obs.x - obs.width / 2 &&
-      startPose.x < obs.x + obs.width / 2 &&
-      startPose.y > obs.y - obs.height / 2 &&
-      startPose.y < obs.y + obs.height / 2
-    ) {
+    if (!isFootprintClearOfObstacles(startPose, shape, [obstacles[i]])) {
       throw new Error(
         `world file "${filePath}": start pose (${startPose.x}, ${startPose.y}) is inside obstacle[${i}]`,
       );
@@ -354,6 +395,6 @@ export function parseWorld(raw: string, filePath: string): LoadedWorld {
 }
 
 // Read and validate a world JSON file (see specs/WORLD_FORMAT.md iteration 2).
-export function loadWorldFile(filePath: string): LoadedWorld {
-  return parseWorld(fs.readFileSync(filePath, "utf8"), filePath);
+export function loadWorldFile(filePath: string, shape: RobotShape = defaultRobotShape()): LoadedWorld {
+  return parseWorld(fs.readFileSync(filePath, "utf8"), filePath, shape);
 }

@@ -16,14 +16,17 @@ import {
   OutgoingEnvelope,
   Transport,
   TransportOptions,
+  WorldSnapshotPayload,
 } from "../src/types";
 import { RobotDescription } from "../src/robotDescription";
+import { toRobotShape } from "../src/geometry";
 import { SimEngine } from "../src/sim";
 import { WebSocketTransport } from "../src/transport";
 
 const DESCRIPTION: RobotDescription = {
   schemaVersion: 2,
   name: "test-two-wheel",
+  body: { width: 0.5, height: 0.5, wheels: { length: 0.3, width: 0.1 } },
   components: [
     { id: "left-wheel", type: "wheel", angle: Math.PI / 2, offset: 0.25 },
     { id: "right-wheel", type: "wheel", angle: -Math.PI / 2, offset: 0.25 },
@@ -242,6 +245,36 @@ test("D-4: duplicate, out-of-order, stale and invalid commands are ignored", () 
 
   drive(5, 6, 1); // a valid command after all rejections still works
   assert.equal(engine.getState().command.left, 1);
+});
+
+// ---- worldSnapshot advertises the collision footprint --------------------
+
+test("worldSnapshot payload.robot includes the manifest-derived shape", async () => {
+  const transport = new FakeTransport();
+  const engine = new SimEngine(transport, DESCRIPTION);
+  engine.start();
+  try {
+    transport.connect("visualiser");
+    await waitFor(() =>
+      transport.sent.some((entry) => entry.envelope.type === "worldSnapshot"),
+    );
+    const snapshot = transport.sent.find(
+      (entry) => entry.envelope.type === "worldSnapshot",
+    );
+    assert.ok(snapshot, "expected a worldSnapshot");
+    const payload = snapshot!.envelope.payload as WorldSnapshotPayload;
+    assert.deepEqual(payload.robot.shape, toRobotShape(DESCRIPTION.body, DESCRIPTION.components));
+    assert.deepEqual(payload.robot.shape, {
+      width: 50,
+      height: 50,
+      wheels: [
+        { angle: Math.PI / 2, offset: 25, length: 30, width: 10 },
+        { angle: -Math.PI / 2, offset: 25, length: 30, width: 10 },
+      ],
+    });
+  } finally {
+    engine.stop();
+  }
 });
 
 // ---- Acceptance criterion: two visualisers get independent seq values -----

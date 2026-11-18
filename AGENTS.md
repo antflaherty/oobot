@@ -5,10 +5,11 @@ replaces scanning the whole repository. Keep it in sync with the code.
 
 ## Current work
 
-The repo is partway through the pre-feature hardening pass: `HARDENING_PLAN.md`
-is the authoritative scope, wave plan and merge-gate checklist, and
-`docs/DECISIONS.md` records the locked decisions (D-1…D-6). Where this file
-disagrees with either, they win. `docs/DOC_AUDIT.md` is the stale-doc work list.
+The pre-feature hardening pass (W0–W4) is complete and feature work is
+unfrozen: `HARDENING_PLAN.md` remains the authoritative scope, wave plan and
+merge-gate checklist, and `docs/DECISIONS.md` records the locked decisions
+(D-1…D-6). Where this file disagrees with either, they win.
+`docs/DOC_AUDIT.md` is the stale-doc work list.
 `next.md` is the user's personal notes and is strictly off-limits (ground rule
 7 of the plan) — never read, edit, stage, commit or ignore it.
 
@@ -152,8 +153,8 @@ their defaults resolve relative to their own code/JAR so standalone commands
 work from any CWD. The sim also accepts `--world <path>` for the obstacle world
 (default `simulator/server/worlds/maze.json`). The manifest decides which
 id-addressed components exist and their mount angles; the world file supplies
-obstacles and the start pose. The visualiser reads neither — it renders
-`worldSnapshot.payload.obstacles`.
+obstacles and the start pose. The visualiser reads neither — it renders the
+obstacles and robot shape from `worldSnapshot.payload`.
 
 ### Build and test
 
@@ -179,7 +180,8 @@ obstacles and the start pose. The visualiser reads neither — it renders
     `payload.readings: [{id, value|null}]`). Persistent, bidirectional; single
     active robot slot (a new robot closes the previous one).
   - **Visualiser channel** `ws://localhost:8081` — `worldSnapshot`
-    (`payload.robot: {x, y, heading}`, `payload.obstacles: [...]`) (sim→visualiser).
+    (`payload.robot: {x, y, heading, shape?}` in world units,
+    `payload.obstacles: [...]`) (sim→visualiser).
     Unidirectional (MVP); multiple tabs are supported.
 - Ports default to 8080/8081 and can be overridden via `ROBOT_PORT` /
   `VISUALISER_PORT` (validated as integers in 1–65535).
@@ -246,12 +248,21 @@ Wheels still roll along the robot's heading (tangentially); each sensor casts a
 ray along `pose.heading + component.angle` against box edges and obstacles, and
 the nearest hit wins. The layout is data, not code: both the Java robot and sim
 server load it at startup. The visualiser does not read the manifest — it draws
-the obstacles supplied in `worldSnapshot`.
+the obstacles and robot shape supplied in `worldSnapshot`.
+
+The manifest may also declare an optional top-level `body` block in **metres**
+(defaults `width`/`height` 0.5, wheel `length` 0.3, `width` 0.1). The Java and
+TS loaders validate it identically (object when present, finite dimensions > 0,
+unknown keys ignored, errors naming `body.<field>`). D-1's ×100 conversion
+gives the world-unit footprint used for collision: the rotated body box plus
+one box per wheel at its mount offset, with the wheel's long axis along the
+heading.
 
 ```json
 {
   "schemaVersion": 2,
   "name": "default-two-wheel",
+  "body": { "width": 0.5, "height": 0.5, "wheels": { "length": 0.3, "width": 0.1 } },
   "components": [
     { "id": "left-wheel",   "type": "wheel",           "angle":  1.5707963267948966, "offset": 0.25 },
     { "id": "right-wheel",  "type": "wheel",           "angle": -1.5707963267948966, "offset": 0.25 },
@@ -267,7 +278,10 @@ the obstacles supplied in `worldSnapshot`.
 - Track width is derived from the manifest as `y_left - y_right` =
   `offset_left·sin(angle_left) − offset_right·sin(angle_right)` (`0.5` for the
   default manifest). The sim uses this in place of the default world config's
-  `trackWidth`; the robot stays a point for sensing/collision.
+  `trackWidth`. Sensing stays centre-based (readings and thresholds unchanged);
+  collision and spawn validation use the full rotated footprint — SAT against
+  obstacle AABBs and world bounds, translation stops at first contact, rotation
+  is held when the turned footprint would overlap, and backing away works.
 - Kinematics (D-1): the world box stays in world units, with
   `WORLD_UNITS_PER_METRE = 100`. Wheel powers are converted to m/s before
   computing angular velocity, then linear speed is converted back to world
@@ -358,13 +372,14 @@ is `docs/DOC_AUDIT.md`. `docs/archive/` holds superseded iteration-1 plans.
 
 | Task | Files to touch |
 |---|---|
-| Change sim world/timestep/collision/sensing | `simulator/server/src/world.ts`, `sensor.ts`, `sim.ts`, `worlds/maze.json` |
+| Change sim world/timestep/collision/sensing | `simulator/server/src/world.ts`, `sensor.ts`, `sim.ts`, `geometry.ts`, `worlds/maze.json` |
 | Add a sim→visualiser message type | `simulator/server/src/transport.ts`, `types.ts`, `sim.ts` + `specs/WIRE_PROTOCOL.md` |
 | Change robot→sim command handling / stale-command rules | `simulator/server/src/sim.ts`, `transport.ts`, `types.ts` |
 | Add a robot behaviour | New `*.java` implementing `RobotBehaviour` in `robot-framework/src/main/java/oobot/robot/student/` (or `example/`), register in `RobotController.createBehaviour` + `VALID_BEHAVIOURS`, then `npm run build:robot` |
 | Change the Java hardware API | `oobot/robot/student/{RobotBehaviour,Mover,Component,Wheel,ProximitySensor,Brain}.java` + `oobot/robot/description/` |
-| Change the robot component layout | `robots/default.json`, `oobot/robot/description/`, `simulator/server/src/robotDescription.ts` + both fixture directories |
-| Change world file / spawn validation | `simulator/server/src/world.ts`, `worlds/maze.json` + `specs/WORLD_FORMAT.md` |
+| Change the robot component layout / body geometry | `robots/default.json`, `oobot/robot/description/{RobotDescription,RobotBody,WheelGeometry}.java`, `simulator/server/src/robotDescription.ts`, `geometry.ts` + both fixture directories + `specs/ROBOT_DESCRIPTION.md` |
+| Change world file / spawn validation | `simulator/server/src/world.ts`, `geometry.ts`, `worlds/maze.json` + `specs/WORLD_FORMAT.md` |
+| Change the `worldSnapshot` robot shape | `simulator/server/src/{geometry,types,sim}.ts`, `simulator/visualiser/src/{types,renderer,main,liveStream}.ts` + `specs/WIRE_PROTOCOL.md` §6.2 |
 | Change visualiser rendering | `simulator/visualiser/src/renderer.ts`, `main.ts` |
 | Change visualiser WS client / reconnect reset | `simulator/visualiser/src/liveStream.ts` |
 | One-command dev startup | `scripts/dev.js`, `scripts/runRobot.js` + root `package.json` |

@@ -11,13 +11,22 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * A parsed component manifest: a robot name plus its declared components.
- * Loaded once at startup from a JSON file via {@link #load(Path)}.
+ * A parsed component manifest: a robot name, its physical body dimensions and
+ * its declared components. Loaded once at startup from a JSON file via
+ * {@link #load(Path)}.
  */
-public record RobotDescription(String name, List<ComponentDescription> components) {
+public record RobotDescription(String name, RobotBody body, List<ComponentDescription> components) {
 
     private static final ObjectMapper MAPPER = new ObjectMapper();
     private static final double DEFAULT_WHEEL_OFFSET = 0.25;
+
+    /**
+     * Convenience constructor for callers that do not care about the physical
+     * body (e.g. tests of wheel layout); uses {@link RobotBody#DEFAULT}.
+     */
+    public RobotDescription(String name, List<ComponentDescription> components) {
+        this(name, RobotBody.DEFAULT, components);
+    }
 
     /**
      * Magnitude of {@code sin(angle)} above which a wheel takes the left role
@@ -31,8 +40,9 @@ public record RobotDescription(String name, List<ComponentDescription> component
      *
      * @throws IllegalArgumentException if the file cannot be read or violates the
      *                                  manifest schema; the message names the file,
-     *                                  the {@code component[i]} index where applicable,
-     *                                  and the problem.
+     *                                  the {@code component[i]} index or the
+     *                                  {@code body.*} key where applicable, and the
+     *                                  problem.
      */
     public static RobotDescription load(Path path) {
         JsonNode root;
@@ -55,6 +65,8 @@ public record RobotDescription(String name, List<ComponentDescription> component
             throw problem(path, "name must be a non-empty string");
         }
         String name = nameNode.textValue();
+
+        RobotBody body = parseBody(root.get("body"), path);
 
         JsonNode componentsNode = root.get("components");
         if (componentsNode == null || !componentsNode.isArray()) {
@@ -153,7 +165,58 @@ public record RobotDescription(String name, List<ComponentDescription> component
                     + leftWheels + " left and " + rightWheels + " right");
         }
 
-        return new RobotDescription(name, List.copyOf(components));
+        return new RobotDescription(name, body, List.copyOf(components));
+    }
+
+    /**
+     * Parse the optional physical body block. Missing keys inherit defaults;
+     * supplied keys are validated individually and unknown keys are ignored.
+     * Failures name the manifest path and the offending {@code body.*} key.
+     */
+    private static RobotBody parseBody(JsonNode node, Path path) {
+        if (node == null) {
+            return RobotBody.DEFAULT;
+        }
+        if (!node.isObject()) {
+            throw problem(path, "body must be a non-null object");
+        }
+
+        double width = readBodyDimension(node.get("width"), "body.width", path,
+                RobotBody.DEFAULT.width());
+        double height = readBodyDimension(node.get("height"), "body.height", path,
+                RobotBody.DEFAULT.height());
+
+        JsonNode wheelsNode = node.get("wheels");
+        WheelGeometry wheels;
+        if (wheelsNode == null) {
+            wheels = WheelGeometry.DEFAULT;
+        } else {
+            if (!wheelsNode.isObject()) {
+                throw problem(path, "body.wheels must be a non-null object");
+            }
+            wheels = new WheelGeometry(
+                    readBodyDimension(wheelsNode.get("length"), "body.wheels.length", path,
+                            WheelGeometry.DEFAULT.length()),
+                    readBodyDimension(wheelsNode.get("width"), "body.wheels.width", path,
+                            WheelGeometry.DEFAULT.width()));
+        }
+
+        return new RobotBody(width, height, wheels);
+    }
+
+    /** A supplied dimension must be a finite number strictly greater than zero. */
+    private static double readBodyDimension(JsonNode node, String label, Path path, double fallback) {
+        if (node == null) {
+            return fallback;
+        }
+        if (!node.isNumber()) {
+            throw problem(path, label + " must be a finite number > 0");
+        }
+        double value = node.doubleValue();
+        if (!Double.isFinite(value) || value <= 0.0) {
+            throw problem(path, label + " must be a finite number > 0");
+        }
+        return value;
     }
 
     /** Accept only the exact schema spellings (same rule as the TypeScript loader). */

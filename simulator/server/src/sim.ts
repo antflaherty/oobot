@@ -26,6 +26,7 @@ import {
   DEFAULT_START_POSE,
 } from "./world";
 import { castFrontRay } from "./sensor";
+import { RobotShape, toRobotShape } from "./geometry";
 import {
   ComponentDescription,
   ComponentRegistry,
@@ -97,6 +98,7 @@ export class SimEngine {
   private readonly transport: Transport;
   private readonly world: WorldModel;
   private readonly registry: ComponentRegistry;
+  private readonly shape: RobotShape;
 
   // Authoritative logical clock — incremented once per sim step.
   private simTick = 0;
@@ -142,10 +144,12 @@ export class SimEngine {
   ) {
     this.transport = transport;
     this.registry = new ComponentRegistry(description);
+    this.shape = toRobotShape(description.body, description.components);
     this.world = new WorldModel(
       { ...(worldConfig ?? DEFAULT_WORLD_CONFIG), trackWidth: this.registry.trackWidth() },
       startPose,
       obstacles,
+      this.shape,
     );
   }
 
@@ -413,7 +417,7 @@ export class SimEngine {
       seq: 0, // assigned per-connection by the transport on send
       simTick: this.simTick,
       payload: {
-        robot: { ...this.world.pose },
+        robot: { ...this.world.pose, shape: this.shape },
         obstacles: this.world.obstacles,
       },
     };

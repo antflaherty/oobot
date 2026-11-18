@@ -36,6 +36,10 @@ class ManifestFixtureParityTest {
 
     private static final List<Fixture> FIXTURES = List.of(
             new Fixture("valid-default.json", true, null),
+            new Fixture("accept-body.json", true, null),
+            new Fixture("reject-body-width-zero.json", false, null),
+            new Fixture("reject-body-wheels-non-finite.json", false, null),
+            new Fixture("reject-body-not-object.json", false, null),
             new Fixture("accept-proximity-sensor-spelling.json", true, null),
             new Fixture("accept-sensor-without-offset.json", true, null),
             new Fixture("accept-alternative-angles.json", true, null),

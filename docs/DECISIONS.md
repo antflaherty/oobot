@@ -373,6 +373,15 @@ is attributable to a specific entry. `J1.4`'s parity test should assert these
 two tokens, and the fixture files themselves must be hash-identical across the
 two fixture directories.
 
+**POST-HARDENING AMENDMENT (feature work after W0–W4; D-1…D-6 unchanged).**
+`robots/default.json` now includes the optional top-level `body` block, and
+fixture `valid-default.json` is a byte-identical copy of that new manifest.
+Four body-validation fixtures were added to both fixture directories:
+`accept-body.json`, `reject-body-width-zero.json`,
+`reject-body-wheels-non-finite.json` and `reject-body-not-object.json`. The
+`body` rules and defaults are specified in `specs/ROBOT_DESCRIPTION.md`; no
+locked decision or value above is changed.
+
 ---
 
 ## Exact safe-stop / stale-command values at a glance

@@ -29,7 +29,7 @@ Defines the implemented sensing path:
 | Fixed Java accessors (D-3) | `Brain.frontSensor()` → id `front-sensor`, `Brain.rightSensor()` → id `right-sensor`; validated at startup. Other sensors may be declared but are not addressable through `Brain`. |
 | Single-slot delivery | Latest values overwrite the previous ones each tick; no queue, no polling (`WIRE_PROTOCOL.md` §8). |
 | Freshness by `simTick` | `simTick` on each snapshot, never wall-clock (`WIRE_PROTOCOL.md` §5). |
-| Mount geometry | `angle` in radians relative to heading: 0 = forward, + = CCW, right = -π/2; robot stays a point (`ROBOT_DESCRIPTION.md`). |
+| Mount geometry | `angle` in radians relative to heading: 0 = forward, + = CCW, right = -π/2; rays originate at the robot centre (`ROBOT_DESCRIPTION.md`). The physical body/wheel footprint affects collision, not sensing. |
 | Obstacles + box edges | Rays hit static axis-aligned obstacles from the world file and the world box edges; nearest hit wins (`WORLD_FORMAT.md`). |
 | Session reset | Java invalidates readings on disconnect, reconnect and tick rollback; visualiser resets its own state (D-5). |
 

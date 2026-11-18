@@ -227,8 +227,17 @@ Example (matching the default `worlds/maze.json` obstacle convention):
 ```json
 { "type": "worldSnapshot", "seq": 142, "simTick": 142,
   "payload": {
-    "robot": { "x": 2.4, "y": -1.1, "heading": 0.78 },
-    "obstacles": [ { "x": 60, "y": 0, "width": 680, "height": 20 } ]
+    "robot": {
+      "x": 2.4, "y": -1.1, "heading": 0.78,
+      "shape": {
+        "width": 50, "height": 50,
+        "wheels": [
+          { "angle":  1.5707963267948966, "offset": 25, "length": 30, "width": 10 },
+          { "angle": -1.5707963267948966, "offset": 25, "length": 30, "width": 10 }
+        ]
+      }
+    },
+    "obstacles": [ { "x": -180, "y": 40, "width": 120, "height": 120 } ]
   } }
 ```
 
@@ -239,8 +248,13 @@ Payload schema:
 | `robot.x` | number | Robot X position in world units |
 | `robot.y` | number | Robot Y position in world units |
 | `robot.heading` | number | Robot heading in radians (0 = +X axis) |
+| `robot.shape` | object (optional) | `{ width, height, wheels: [{ angle, offset, length, width }] }`; all dimensions and `offset` in **world units**, wheel `angle` in radians. Derived from the manifest with D-1's ×100 conversion. |
 | `obstacles` | array of `{ x, y, width, height }` | Static axis-aligned box obstacles, centre-based (`x`,`y` = centre; `width`,`height` = full extents). May be empty. |
 
+The sim always sends `robot.shape`; the field is optional so older snapshots
+remain valid. The visualiser uses it to draw the square body and wheels, and
+falls back to the same default geometry when it is absent. Envelope and all
+other payload fields are unchanged.
 `worldSnapshot` does not carry sensor readings. The visualiser renders the
 robot, the box and these obstacles; it never drives sim timing.
 
@@ -295,7 +309,7 @@ sensor, overwritten every tick:
 |---------|---------|-----------|-----------|--------|-----------------|
 | Robot (`ROBOT_PORT`) | `componentCommand` | robot → sim | Yes | Implemented | `{ commands: [{ id, value }] }`; wheel `value` in `[-1, 1]`; persistent actuator state; one batched frame per behaviour tick; D-4 checks apply |
 | Robot (`ROBOT_PORT`) | `componentSnapshot` | sim → robot | Yes | Implemented | `{ readings: [{ id, value }] }`, value number or `null`; one reading per declared proximity sensor |
-| Visualiser (`VISUALISER_PORT`) | `worldSnapshot` | sim → visualiser | Yes | Implemented | `{ robot: { x, y, heading }, obstacles: [...] }`; drop-oldest backpressure; channel is unidirectional |
+| Visualiser (`VISUALISER_PORT`) | `worldSnapshot` | sim → visualiser | Yes | Implemented | `{ robot: { x, y, heading, shape? }, obstacles: [...] }` (shape in world units); drop-oldest backpressure; channel is unidirectional |
 | Visualiser (`VISUALISER_PORT`) | `userControl` | visualiser → sim | — | Deferred | Start/pause/reset idea; no payload schema, not sent |
 
 ## 10. Deferred beyond MVP

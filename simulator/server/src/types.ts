@@ -3,6 +3,8 @@
 // The wire protocol envelope ({ type, seq, simTick, payload }) and NDJSON
 // framing are locked by specs/WIRE_PROTOCOL.md — do not change them here.
 
+import type { RobotShape } from "./geometry";
+
 export type Channel = "robot" | "visualiser";
 
 export interface IncomingEnvelope {
@@ -57,7 +59,7 @@ export interface Obstacle {
 }
 
 export interface WorldSnapshotPayload {
-  robot: { x: number; y: number; heading: number }; // heading: radians, 0 = +X axis
+  robot: { x: number; y: number; heading: number; shape?: RobotShape }; // heading: radians, 0 = +X axis
   obstacles: Obstacle[]; // static obstacles (iteration 2)
 }
 

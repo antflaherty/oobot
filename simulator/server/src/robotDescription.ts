@@ -11,14 +11,31 @@ export interface ComponentDescription {
   offset: number;
 }
 
+// Physical body dimensions in metres. Used by the sim to build the robot's
+// collision footprint; the visualiser receives the converted shape in the
+// worldSnapshot. All dimensions are positive and finite.
+export interface RobotBody {
+  width: number;
+  height: number;
+  wheels: { length: number; width: number };
+}
+
 export interface RobotDescription {
   schemaVersion: number;
   name: string;
+  body: RobotBody;
   components: ComponentDescription[];
 }
 
 const COMPONENT_TYPES: ReadonlySet<string> = new Set<ComponentType>(['wheel', 'proximitySensor']);
 const DEFAULT_WHEEL_OFFSET = 0.25;
+
+// Applied when the manifest omits `body` (or a member of it).
+export const DEFAULT_ROBOT_BODY: RobotBody = {
+  width: 0.5,
+  height: 0.5,
+  wheels: { length: 0.3, width: 0.1 },
+};
 
 type WheelRole = 'left' | 'right';
 
@@ -37,6 +54,61 @@ function errorMessage(err: unknown): string {
 
 function fail(path: string, problem: string): never {
   throw new Error(`${path}: ${problem}`);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readBodyDimension(value: unknown, label: string, path: string): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) {
+    return fail(path, `${label} must be a finite number > 0`);
+  }
+  return value;
+}
+
+// `body` is optional for backwards compatibility; supplied dimensions are
+// validated individually and unknown keys are ignored. Errors name both the
+// manifest path and the offending `body.<field>` / `body.wheels.<field>` key.
+function parseBody(value: unknown, path: string): RobotBody {
+  if (value === undefined) {
+    return {
+      ...DEFAULT_ROBOT_BODY,
+      wheels: { ...DEFAULT_ROBOT_BODY.wheels },
+    };
+  }
+  if (!isRecord(value)) {
+    return fail(path, 'body must be a non-null object');
+  }
+
+  // Only supplied dimensions are validated; omitted keys inherit the default.
+  const width = value.width === undefined
+    ? DEFAULT_ROBOT_BODY.width
+    : readBodyDimension(value.width, 'body.width', path);
+  const height = value.height === undefined
+    ? DEFAULT_ROBOT_BODY.height
+    : readBodyDimension(value.height, 'body.height', path);
+
+  if (value.wheels === undefined) {
+    return { width, height, wheels: { ...DEFAULT_ROBOT_BODY.wheels } };
+  }
+  if (!isRecord(value.wheels)) {
+    return fail(path, 'body.wheels must be a non-null object');
+  }
+
+  const wheels = value.wheels;
+  return {
+    width,
+    height,
+    wheels: {
+      length: wheels.length === undefined
+        ? DEFAULT_ROBOT_BODY.wheels.length
+        : readBodyDimension(wheels.length, 'body.wheels.length', path),
+      width: wheels.width === undefined
+        ? DEFAULT_ROBOT_BODY.wheels.width
+        : readBodyDimension(wheels.width, 'body.wheels.width', path),
+    },
+  };
 }
 
 // JSON.parse normalises numeric literals ("2.0" and "2" both become the number
@@ -75,6 +147,8 @@ export function loadRobotDescription(path: string): RobotDescription {
   if (!Array.isArray(description.components)) {
     return fail(path, 'components must be an array');
   }
+
+  const body = parseBody(description.body, path);
 
   const items = description.components as unknown[];
   const ids = new Set<string>();
@@ -151,7 +225,7 @@ export function loadRobotDescription(path: string): RobotDescription {
     return fail(path, 'wheels must include exactly one left and one right (derived from angle)');
   }
 
-  return { schemaVersion: 2, name: description.name, components };
+  return { schemaVersion: 2, name: description.name, body, components };
 }
 
 export class ComponentRegistry {

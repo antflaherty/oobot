@@ -41,11 +41,11 @@ World file JSON (the shipped default, `worlds/maze.json`):
   "height": 600,
   "robot": { "x": -340, "y": -240, "heading": 0 },
   "obstacles": [
-    { "x": -60,  "y": -160, "width": 680, "height": 20 },
-    { "x": 60,   "y":   0,  "width": 680, "height": 20 },
-    { "x": -60,  "y": 160,  "width": 680, "height": 20 },
-    { "x": -300, "y": -80,  "width": 20,  "height": 100 },
-    { "x": 0,    "y": -80,  "width": 60,  "height": 60 }
+    { "x": -20,  "y": -260, "width": 160, "height": 80  },
+    { "x": 350,  "y":  230, "width": 100, "height": 140 },
+    { "x": -180, "y":   40, "width": 120, "height": 120 },
+    { "x": -60,  "y":  260, "width": 160, "height": 80  },
+    { "x": 230,  "y":  -80, "width": 140, "height": 120 }
   ]
 }
 ```
@@ -63,27 +63,34 @@ must be finite and `width`/`height` > 0.
 
 ### Validation rules
 
-`parseWorld(raw, filePath)` rejects invalid input with a message naming the
-file path. A start pose inside an obstacle also names `obstacle[<i>]`.
-Obstacles are parsed **before** the start pose so the pose can be checked
-against them:
+`parseWorld(raw, filePath, shape)` rejects invalid input with a message naming
+the file path. An invalid start pose inside an obstacle also names
+`obstacle[<i>]`. Obstacles are parsed **before** the start pose so the pose can
+be checked against them. Validation checks the **full rotated footprint**, not
+just the centre: the body box plus one box per wheel, at mount offsets, in world
+units (`WORLD_UNITS_PER_METRE = 100`, from the robot manifest's `body` block):
 
-- start pose outside the box is rejected (bounds are inclusive);
-- start pose strictly inside an obstacle is rejected; a point exactly on a
-  face is allowed (that is where stop-dead contact leaves the robot).
+- a footprint corner outside the box is rejected (bounds are inclusive; a face
+  touching the boundary is allowed);
+- a footprint overlapping an obstacle is rejected; touching a face is allowed
+  (that is where stop-dead contact leaves the robot) and backing away works.
 
 The sim constructs `WorldModel` with the parsed config, start pose and
-obstacles. `WorldModel.trackWidth` is then overridden by the value derived from
-the robot manifest (D-1); world files do not set track width.
+obstacles. `WorldModel.trackWidth` is overridden by the value derived from the
+robot manifest (D-1); world files set neither track width nor body geometry.
 
 ## Obstacle use
 
-- Motion: a ray from the current pose toward the intended next pose detects
-  the nearest obstacle contact and stops translation there (no penetration,
-  no sliding, no bouncing); rotation continues. Box clamping sets the same
-  `collided` flag.
-- Sensing: each proximity sensor casts along `heading + angle` and reports the
-  nearest hit among obstacles and box edges (`specs/SENSORS.md`).
+- Motion: the rotated footprint — three oriented boxes (body + two wheels at
+  their mount offsets, long wheel axis along the heading) — is tested against
+  obstacle AABBs and world bounds with SAT. Translation stops at the first
+  contact (no penetration, sliding or bouncing); all footprint corners must
+  stay inside the bounds. Rotation is held when the turned footprint would
+  overlap, while backing away from contact remains possible. These contacts
+  set the `collided` flag.
+- Sensing: unchanged by geometry — each proximity sensor still casts from the
+  robot centre along `heading + angle` and reports the nearest hit among
+  obstacles and box edges (`specs/SENSORS.md`).
 - Publishing: `worldSnapshot.payload.obstacles` is the static obstacle array,
   sent to every visualiser each tick.
 
@@ -96,7 +103,7 @@ sensor readings and resets its seq counter (D-2/D-4).
 
 ## Out of scope
 
-- Moving obstacles, complex/rotated shapes, sliding or bouncing.
+- Moving obstacles, complex/rotated obstacle shapes, sliding or bouncing.
 - Multiple worlds, world-selection UI, runtime world switching.
 - A world file changing max speed, tick rate or track width (those come from
   sim defaults / the manifest).
